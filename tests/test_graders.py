@@ -89,6 +89,20 @@ def test_parallel_missing_one_fails():
     assert not v.correct and "call_count" in v.detail
 
 
+def test_parallel_needs_real_matching_not_greedy():
+    """Greedy would give got[0] (x=1,y=2) to gold[0] (x=1) and fail gold[1]."""
+    gold = [{"name": "A", "arguments": {"x": 1}}, {"name": "A", "arguments": {"x": 1, "y": 2}}]
+    v = g(resp(("A", '{"x": 1, "y": 2}'), ("A", '{"x": 1}')), gold)
+    assert v.correct, v.detail
+
+
+def test_failure_reason_is_the_failing_calls_own():
+    """Regression: a later call's miss was reported as the earlier call's 'match' note."""
+    gold = [{"name": "A", "arguments": {"x": 1}}, {"name": "B", "arguments": {"y": 2}}]
+    v = g(resp(("A", '{"x": 1}'), ("B", '{"y": 3}')), gold)
+    assert not v.correct and v.detail == "B:wrong_values:y"
+
+
 # --- irrelevance ------------------------------------------------------------
 def test_irrelevance_abstains_correctly():
     v = g(resp(content="I can't help with that."), [])

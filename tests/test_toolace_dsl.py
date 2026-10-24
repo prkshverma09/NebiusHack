@@ -111,3 +111,36 @@ def test_names_with_apostrophe_and_parens():
     assert parse_calls("[Get Today's Prices(), Open-High-Low-Close (OHLC) API(symbol=\"BTCUSD\")]") == [
         {"name": "Get Today's Prices", "arguments": {}},
         {"name": "Open-High-Low-Close (OHLC) API", "arguments": {"symbol": "BTCUSD"}}]
+
+
+def test_keyword_and_nonidentifier_keys():
+    """from=/class= are Python keywords, $select is not an identifier — all real ToolACE keys."""
+    assert parse_calls('[Flights(from="2021-05-25", class="Business"), GetMySkills($select="coding")]') == [
+        {"name": "Flights", "arguments": {"from": "2021-05-25", "class": "Business"}},
+        {"name": "GetMySkills", "arguments": {"$select": "coding"}}]
+
+
+def test_rest_path_names():
+    """Real holdout names: REST paths, including {path params}."""
+    assert parse_calls('[/scripts/inventory(), /{orgCode}/cards(muid="X")]') == [
+        {"name": "/scripts/inventory", "arguments": {}},
+        {"name": "/{orgCode}/cards", "arguments": {"muid": "X"}}]
+
+
+def test_comma_inside_function_name():
+    assert parse_calls('[Get All Champions(), Get Games by Platform, Category, and Sort(platform="pc")]') == [
+        {"name": "Get All Champions", "arguments": {}},
+        {"name": "Get Games by Platform, Category, and Sort", "arguments": {"platform": "pc"}}]
+
+
+@pytest.mark.parametrize("broken", [
+    '[database.insert_data=>["database_name"="company_db"]]',
+    '[{Fetcher.retrieve}=>(location="Hawaii"; dateRange="x")]',
+    '[advice|(air_quality_index:150)]',
+    '[Get Values-("variable_id"="654321")]',
+    '[{get_789bet_info}:()]',
+    '[{Fetcher.retrieve}=>(location="Hawaii")]'])
+def test_genuinely_broken_labels_still_rejected(broken):
+    """Real malformed ToolACE labels. Loosening the parser must not start accepting these."""
+    with pytest.raises(DSLParseError):
+        parse_calls(broken)

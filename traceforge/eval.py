@@ -13,6 +13,7 @@ interrupted by a 503 storm resumes and only re-calls what failed.
 """
 from __future__ import annotations
 
+import collections
 import concurrent.futures as cf
 import hashlib
 import json
@@ -91,6 +92,24 @@ def call_model(client, model: str, item: EvalItem, *, max_tokens: int = 1024,
     return {"response": None, "latency_ms": 0, "tokens": 0, "error": last}
 
 
+def grade_call(grader: Grader, item: EvalItem, out: dict) -> tuple[str, str]:
+    """The ONE place a model call becomes a verdict: correct | incorrect | error.
+
+    Shared by run_eval and scripts/gen_traces.py so both paths get the same
+    guards. Two things are `error`, never `incorrect`, because neither says
+    anything about the model: a transport failure, and a gold label the grader
+    cannot parse (3% of ToolACE train is malformed, e.g. `name=>(k="v"; ...)`).
+    """
+    if out["error"]:
+        return "error", out["error"]
+    try:
+        v = grader.grade(prompt_messages=item.messages, response=out["response"],
+                         ground_truth=item.ground_truth)
+    except ValueError as e:                 # DSLParseError subclasses ValueError
+        return "error", f"gold_unparseable:{str(e)[:80]}"
+    return ("correct" if v.correct else "incorrect"), v.detail
+
+
 def run_eval(models: list[str], items: list[EvalItem], grader: Grader, client, *,
              workers: int = 16, progress: bool = True) -> list[EvalResult]:
     """Run every (model, item) pair concurrently and grade it.
@@ -104,11 +123,11 @@ def run_eval(models: list[str], items: list[EvalItem], grader: Grader, client, *
 
     def one(m: str, it: EvalItem) -> EvalResult:
         out = call_model(client, m, it)
-        if out["error"]:
-            return EvalResult(it.item_id, m, False, f"error:{out['error']}", 0, 0)
-        v = grader.grade(prompt_messages=it.messages, response=out["response"],
-                         ground_truth=it.ground_truth)
-        return EvalResult(it.item_id, m, v.correct, v.detail, out["latency_ms"], out["tokens"])
+        verdict, detail = grade_call(grader, it, out)
+        if verdict == "error":
+            return EvalResult(it.item_id, m, False, f"error:{detail}", 0, 0)
+        return EvalResult(it.item_id, m, verdict == "correct", detail,
+                          out["latency_ms"], out["tokens"])
 
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
         for fut in cf.as_completed([ex.submit(one, m, it) for m, it in jobs]):
@@ -170,6 +189,39 @@ def paired_stats(results: list[EvalResult], model_a: str, model_b: str, *,
             "b_only": b_only, "a_only": a_only}
 
 
+FAILURE_KINDS = {
+    "wrong_values": "right function, wrong argument value",
+    "missing_args": "right function, required argument missing",
+    "no_match_for": "called the wrong function",
+    "call_count": "wrong number of calls (extra or missing)",
+    "no_call_emitted": "answered in prose / empty list instead of calling",
+    "irrelevance": "called a tool when it should have abstained",
+    "unparseable_call": "emitted a malformed call",
+}
+
+
+def failure_kind(detail: str) -> str:
+    """Map a grader detail string to one taxonomy bucket.
+
+    Details look like "Fn Name:wrong_values:arg" or "call_count:5!=2"; the kind
+    is the first known token, since function names may themselves contain ':'.
+    """
+    for kind in FAILURE_KINDS:
+        if detail.startswith(kind) or f":{kind}" in detail:
+            return kind
+    return "other"
+
+
+def failure_taxonomy(results: list[EvalResult], models: list[str]) -> dict:
+    """{model: {kind: count}} over graded failures (errors excluded)."""
+    out = {}
+    for m in models:
+        c = collections.Counter(failure_kind(r.detail) for r in results
+                                if r.model == m and not is_error(r) and not r.verdict)
+        out[m] = dict(c.most_common())
+    return out
+
+
 def failure_shortlist(results: list[EvalResult], weak: str, strong: str, k: int = 5) -> list[dict]:
     """Items the strong model gets right and the weak one gets wrong — demo replay candidates."""
     by = {(r.model, r.item_id): r for r in results}
@@ -202,12 +254,23 @@ def score_table(results: list[EvalResult], models: list[str], baseline: str) -> 
         lo, hi = c["ci95"]
         lines.append(f"| `{c['b']}` | {c['delta']:+.1%} | [{lo:+.1%}, {hi:+.1%}] "
                      f"| {c['mcnemar_p']:.3g} | {c['b_only']}/{c['a_only']} | {c['n_paired']} | {c['excluded']} |")
+    tax = failure_taxonomy(results, models)
+    kinds = [k for k in FAILURE_KINDS if any(k in t for t in tax.values())] + \
+            (["other"] if any("other" in t for t in tax.values()) else [])
+    if kinds:
+        lines += ["", "Where they fail (graded failures, errors excluded):", "",
+                  "| failure | " + " | ".join(f"`{m.split('/')[-1]}`" for m in models) + " |",
+                  "|---|" + "---|" * len(models)]
+        for k in kinds:
+            label = FAILURE_KINDS.get(k, "unclassified")
+            lines.append(f"| {label} | " + " | ".join(str(tax[m].get(k, 0)) for m in models) + " |")
     bars = []
     for a in accs:
         if a["acc"] is not None:
             name = a["model"][-34:]
             bars.append(f"{name:>34} {'#' * round(a['acc'] * 40):<40} {a['acc']:.1%}")
-    return {"accuracy": accs, "paired": comps, "markdown": "\n".join(lines), "ascii": "\n".join(bars)}
+    return {"accuracy": accs, "paired": comps, "taxonomy": tax,
+            "markdown": "\n".join(lines), "ascii": "\n".join(bars)}
 
 
 def persist(results: list[EvalResult], table: dict, *, benchmark: str, models: list[str],
@@ -221,7 +284,7 @@ def persist(results: list[EvalResult], table: dict, *, benchmark: str, models: l
                "items": [asdict(r) for r in results]}
     (RUNS_DIR / f"{run_id}.json").write_text(json.dumps(payload, indent=1), encoding="utf-8")
     if db_path and Path(db_path).exists():
-        con = sqlite3.connect(db_path)
+        con = sqlite3.connect(db_path, timeout=60)    # shared with A's server + gen_traces
         try:
             have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if {"eval_runs", "eval_items"} <= have:

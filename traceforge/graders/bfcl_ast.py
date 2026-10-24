@@ -119,28 +119,39 @@ class ToolCallGrader:
         if len(got) != len(gold):
             return Verdict(False, f"call_count:{len(got)}!={len(gold)}")
 
-        # Order-insensitive one-to-one matching (greedy is exact here: calls in
-        # a parallel set are distinct, so no augmenting path exists).
-        remaining = list(range(len(got)))
-        details: list[str] = []
-        for g in gold:
-            hit = None
-            for idx in remaining:
-                cand = got[idx]
+        # Order-insensitive one-to-one matching via augmenting paths. Greedy is NOT
+        # exact: extra args are tolerated, so got A(x=1,y=2) can satisfy gold A(x=1)
+        # and starve gold A(x=1,y=2) of the only call that fits it.
+        ok_edge: dict[tuple[int, int], str] = {}     # (gold_i, got_j) -> match note
+        misses: dict[int, str] = {}                  # gold_i -> most informative failure
+        for i, g in enumerate(gold):
+            for j, cand in enumerate(got):
                 if cand["name"] != g["name"]:
                     continue
                 ok, detail = args_match(g["arguments"], cand["arguments"])
                 if ok:
-                    hit, note = idx, detail
-                    break
-                details.append(f"{g['name']}:{detail}")
-            if hit is None:
+                    ok_edge[(i, j)] = detail
+                else:
+                    misses.setdefault(i, f"{g['name']}:{detail}")
+
+        owner: dict[int, int] = {}                   # got_j -> gold_i
+
+        def augment(i: int, seen: set[int]) -> bool:
+            for j in range(len(got)):
+                if (i, j) in ok_edge and j not in seen:
+                    seen.add(j)
+                    if j not in owner or augment(owner[j], seen):
+                        owner[j] = i
+                        return True
+            return False
+
+        for i in range(len(gold)):
+            if not augment(i, set()):
                 names = ",".join(c["name"] for c in got)
-                reason = details[-1] if details else f"no_match_for:{g['name']}|got:{names}"
-                return Verdict(False, reason)
-            remaining.remove(hit)
-            details.append(f"{g['name']}:{note}")
-        return Verdict(True, ";".join(details)[:200])
+                # Report THIS gold call's own failure, never another call's success note.
+                return Verdict(False, misses.get(i, f"no_match_for:{gold[i]['name']}|got:{names}"))
+        notes = [f"{gold[i]['name']}:{ok_edge[(i, j)]}" for j, i in sorted(owner.items(), key=lambda x: x[1])]
+        return Verdict(True, ";".join(notes)[:200])
 
 
 GRADER = ToolCallGrader()

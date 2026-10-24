@@ -1,6 +1,7 @@
 """Eval runner + stats against fake models with known accuracy (contract B4 acceptance)."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -77,6 +78,44 @@ def test_outage_is_error_not_incorrect_and_excluded():
     assert a["teacher"]["errors"] == 20 and a["teacher"]["acc"] is None    # not 0%
     p = ev.paired_stats(res, "base", "teacher")
     assert p["n_paired"] == 0 and p["excluded"] == 20 and p["delta"] is None
+
+
+def test_malformed_gold_is_error_not_incorrect():
+    """A broken label says nothing about the model: excluded, never scored wrong."""
+    its = items(3)
+    its[1] = ev.EvalItem("bad", its[1].messages, '[{Fetcher.retrieve}=>(location="Hawaii")]')
+    c = FakeClient({"m": {0, 1, 2}})
+    res = {r.item_id: r for r in ev.run_eval(["m"], its, get_grader("toolace"), c, progress=False)}
+    assert ev.is_error(res["bad"]) and "gold_unparseable" in res["bad"].detail
+    a = ev.accuracy(list(res.values()), "m")
+    assert (a["n"], a["errors"], a["acc"]) == (2, 1, 1.0)
+
+
+@pytest.mark.parametrize("detail,kind", [
+    ("Player News:wrong_values:locale", "wrong_values"),
+    ("book:missing_args:to", "missing_args"),
+    ("no_match_for:get_weather|got:get_time", "no_match_for"),
+    ("call_count:5!=2", "call_count"),
+    ("no_call_emitted", "no_call_emitted"),
+    ("irrelevance:called:f", "irrelevance"),
+    ("unparseable_call:bad value", "unparseable_call"),
+    ("Get Score: Live:wrong_values:x", "wrong_values"),       # ':' inside the function name
+    ("something new", "other"),
+])
+def test_failure_kind(detail, kind):
+    assert ev.failure_kind(detail) == kind
+
+
+def test_real_eval_failures_all_classified():
+    """Every failure in the saved 250-item run must land in a named bucket."""
+    # Newest by mtime — run ids are random hex, so name order is meaningless.
+    runs = sorted(ev.REPO_ROOT.joinpath("data/evals").glob("ev-*.json"), key=lambda p: p.stat().st_mtime)
+    if not runs:
+        pytest.skip("no saved eval run")
+    items = json.loads(runs[-1].read_text(encoding="utf-8"))["items"]
+    fails = [i for i in items if not i["verdict"] and not i["detail"].startswith("error:")]
+    other = [i["detail"] for i in fails if ev.failure_kind(i["detail"]) == "other"]
+    assert fails and not other, other[:5]
 
 
 def test_4xx_is_not_retried():

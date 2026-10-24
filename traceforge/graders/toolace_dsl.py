@@ -14,7 +14,29 @@ without executing anything.
 from __future__ import annotations
 
 import ast
+import re
 from typing import Any
+
+
+# Bare keys, optionally $-prefixed (OData-style "$select"), hyphens allowed after the
+# first char ("sort-by"). Keywords like from/class allowed. Quoted keys are rejected.
+_KEY_RE = re.compile(r"^\$?[A-Za-z_][A-Za-z0-9_.\-]*$")
+
+# Function names: real ToolACE names contain spaces, dots, apostrophes, hyphens,
+# commas and balanced parens ("Open-High-Low-Close (OHLC) API"). Broken labels
+# look like "{Fetcher.retrieve}=>", "advice|", "{get_x}:", "Get Values-".
+# REST-path names are real too: "/scripts/inventory", "/{orgCode}/cards" — so a
+# leading "/" is allowed, and only path names may contain {path params}.
+_NAME_BAD_CHARS = set("=|;<>")
+
+
+def _check_name(name: str) -> str:
+    is_path = name.startswith("/")
+    if (not name or not (is_path or name[0].isalnum() or name[0] == "_")
+            or _NAME_BAD_CHARS & set(name) or name[-1] in "-:."
+            or (not is_path and set("{}") & set(name))):
+        raise DSLParseError(f"bad function name {name[:40]!r}")
+    return name
 
 
 class DSLParseError(ValueError):
@@ -43,7 +65,7 @@ def _value(node: ast.AST) -> Any:
     raise DSLParseError(f"non-literal argument value: {ast.dump(node)[:80]}")
 
 
-def _split_top_level(body: str) -> list[str]:
+def _split_top_level(body: str, *, in_args: bool = False) -> list[str]:
     """Split 'A(..), B(..)' on commas at paren/bracket depth 0, outside strings.
 
     Quotes open a string only at depth > 0: names live at depth 0 and may hold
@@ -60,7 +82,7 @@ def _split_top_level(body: str) -> list[str]:
             elif ch == quote:
                 quote = None
             continue
-        if ch in ("'", '"') and depth > 0:
+        if ch in ("'", '"') and (depth > 0 or in_args):
             quote = ch
         elif ch in "([{":
             depth += 1
@@ -111,18 +133,44 @@ def _parse_call(text: str) -> dict:
     lp = _args_open_paren(text)
     if lp <= 0 or not text.endswith(")"):
         raise DSLParseError(f"not a call: {text[:60]!r}")
-    name = text[:lp].strip()
-    try:
-        tree = ast.parse(f"_f({text[lp + 1:-1]})", mode="eval")
-    except SyntaxError as e:
-        raise DSLParseError(f"bad arguments for {name!r}: {e.msg}") from e
-    call = tree.body
-    if not isinstance(call, ast.Call):
-        raise DSLParseError(f"not a call: {name!r}")
-    args = {kw.arg: _value(kw.value) for kw in call.keywords if kw.arg}
-    for i, pos in enumerate(call.args):          # rare; keep rather than drop
-        args[f"_pos{i}"] = _value(pos)
+    name = _check_name(text[:lp].strip())
+    args: dict = {}
+    # Keys are split off by hand rather than via ast: ToolACE uses keys that are
+    # Python keywords (from=, class=) or not identifiers at all ($select=).
+    for i, part in enumerate(_split_top_level(text[lp + 1:-1], in_args=True)):
+        eq = _top_level_eq(part)
+        key, raw = (part[:eq].strip(), part[eq + 1:].strip()) if eq > 0 else (f"_pos{i}", part)
+        if not key or not raw:
+            raise DSLParseError(f"bad argument {part[:40]!r} for {name!r}")
+        if not _KEY_RE.match(key):          # rejects quoted keys: "variable_id"=...
+            raise DSLParseError(f"bad argument key {key[:30]!r} for {name!r}")
+        try:
+            args[key] = _value(ast.parse(raw, mode="eval").body)
+        except SyntaxError as e:
+            raise DSLParseError(f"bad value for {name!r}.{key}: {e.msg}") from e
     return {"name": name, "arguments": args}
+
+
+def _top_level_eq(part: str) -> int:
+    """Index of the first '=' outside strings/brackets, or -1."""
+    depth, quote, esc = 0, None, False
+    for i, ch in enumerate(part):
+        if quote:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "=" and depth == 0:
+            return i
+    return -1
 
 
 def looks_like_dsl(text: str) -> bool:
@@ -138,4 +186,13 @@ def parse_calls(text: str) -> list[dict]:
     t = (text or "").strip()
     if not (t.startswith("[") and t.endswith("]")):
         raise DSLParseError("call list must be wrapped in [ ]")
-    return [_parse_call(p) for p in _split_top_level(t[1:-1])]
+    calls, pending = [], ""
+    for part in _split_top_level(t[1:-1]):
+        if "(" not in part:                 # "Get Games by Platform, Category, and Sort(...)"
+            pending += part + ", "
+            continue
+        calls.append(_parse_call(pending + part))
+        pending = ""
+    if pending:
+        raise DSLParseError(f"not a call: {pending.rstrip(', ')[:60]!r}")
+    return calls

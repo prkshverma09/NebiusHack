@@ -50,9 +50,10 @@ def main() -> int:
     results = run_eval(models, items, get_grader(args.task), client, workers=args.workers)
 
     table = score_table(results, models, baseline)
+    # Print before persisting: a locked DB must not swallow the numbers.
+    print("\n" + table["markdown"] + "\n\n" + table["ascii"], flush=True)
     run_id = persist(results, table, benchmark=Path(args.holdout).parent.name,
                      models=models, db_path=s.db_path)
-    print("\n" + table["markdown"] + "\n\n" + table["ascii"])
     scored = [a for a in table["accuracy"] if a["acc"] is not None]
     strong = max(scored, key=lambda a: a["acc"]) if scored else None
     if strong and strong["model"] != baseline:
