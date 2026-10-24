@@ -98,11 +98,18 @@ def normalise_gold(ground_truth: Any) -> list[dict]:
 class ToolCallGrader:
     """Deterministic AST-equivalent matcher over tool calls."""
 
-    name = "bfcl"
+    name = "toolcall"
+
+    # Overridable seams: BFCLGrader swaps the gold shape and the argument rule.
+    def normalise(self, ground_truth: Any) -> list[dict]:
+        return normalise_gold(ground_truth)
+
+    def match_args(self, gold_args: dict, got_args: dict) -> tuple[bool, str]:
+        return args_match(gold_args, got_args)
 
     def grade(self, *, prompt_messages: list[dict], response: dict,
               ground_truth: Any) -> Verdict:
-        gold = normalise_gold(ground_truth)
+        gold = self.normalise(ground_truth)
         try:
             got = extract_calls(response)
         except DSLParseError as e:
@@ -128,7 +135,7 @@ class ToolCallGrader:
             for j, cand in enumerate(got):
                 if cand["name"] != g["name"]:
                     continue
-                ok, detail = args_match(g["arguments"], cand["arguments"])
+                ok, detail = self.match_args(g["arguments"], cand["arguments"])
                 if ok:
                     ok_edge[(i, j)] = detail
                 else:
@@ -152,6 +159,44 @@ class ToolCallGrader:
                 return Verdict(False, misses.get(i, f"no_match_for:{gold[i]['name']}|got:{names}"))
         notes = [f"{gold[i]['name']}:{ok_edge[(i, j)]}" for j, i in sorted(owner.items(), key=lambda x: x[1])]
         return Verdict(True, ";".join(notes)[:200])
+
+
+class BFCLGrader(ToolCallGrader):
+    """BFCL v3 semantics: each gold argument lists ALL acceptable values.
+
+    Gold: {"bfcl": [{"fn": {"arg": [v1, v2, ""]}}]}  — "" means "may be omitted".
+    Unlike ToolACE, an argument the model sends that is NOT in the gold mapping
+    fails: BFCL's answer key enumerates every permitted parameter, so an extra
+    one is an invented parameter, not an optional one.
+    """
+
+    name = "bfcl"
+
+    def normalise(self, ground_truth: Any) -> list[dict]:
+        calls = ground_truth.get("bfcl") if isinstance(ground_truth, dict) else None
+        if calls is None:
+            raise ValueError(f"BFCL gold must be {{'bfcl': [...]}}, got {type(ground_truth).__name__}")
+        out = []
+        for c in calls:
+            (fn, allowed), = c.items()          # exactly one function per gold entry
+            out.append({"name": fn, "arguments": allowed})
+        return out
+
+    def match_args(self, gold_args: dict, got_args: dict) -> tuple[bool, str]:
+        from traceforge.graders.base import _canon
+        got_c = {str(k): _canon(v) for k, v in got_args.items()}
+        for k, allowed in gold_args.items():
+            optional = "" in allowed
+            if k not in got_c:
+                if optional:
+                    continue
+                return False, f"missing_args:{k}"
+            if got_c[k] not in [_canon(a) for a in allowed if a != ""]:
+                return False, f"wrong_values:{k}"
+        extra = sorted(set(got_c) - set(gold_args))
+        if extra:
+            return False, f"extra_args:{','.join(extra)}"
+        return True, "match"
 
 
 GRADER = ToolCallGrader()

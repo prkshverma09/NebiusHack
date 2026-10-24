@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from traceforge.graders.base import Grader, Verdict
-from traceforge.graders.bfcl_ast import ToolCallGrader
+from traceforge.graders.bfcl_ast import BFCLGrader, ToolCallGrader
 
 _REGISTRY: dict[str, Grader] = {
-    "bfcl": ToolCallGrader(),
+    "bfcl": BFCLGrader(),           # any-of answer key, extra args fail (BFCL v3 semantics)
     "xlam": ToolCallGrader(),      # same shape, same matcher (contract §9a.2)
     "glaive": ToolCallGrader(),
     "toolace": ToolCallGrader(),   # DSL gold/answers, parsed in toolace_dsl.py

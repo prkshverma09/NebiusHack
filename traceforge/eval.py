@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import random
+import re
 import sqlite3
 import time
 import uuid
@@ -192,6 +193,7 @@ def paired_stats(results: list[EvalResult], model_a: str, model_b: str, *,
 FAILURE_KINDS = {
     "wrong_values": "right function, wrong argument value",
     "missing_args": "right function, required argument missing",
+    "extra_args": "invented a parameter not in the schema",
     "no_match_for": "called the wrong function",
     "call_count": "wrong number of calls (extra or missing)",
     "no_call_emitted": "answered in prose / empty list instead of calling",
@@ -220,6 +222,22 @@ def failure_taxonomy(results: list[EvalResult], models: list[str]) -> dict:
                                 if r.model == m and not is_error(r) and not r.verdict)
         out[m] = dict(c.most_common())
     return out
+
+
+_CAT_ID = re.compile(r"^([a-z_]+?)_\d+$")
+
+
+def by_category(results: list[EvalResult], models: list[str]) -> dict:
+    """{category: {model: acc}} for benchmarks whose ids are "<category>_<n>" (BFCL).
+    Returns {} when ids carry no category (ToolACE prompt hashes)."""
+    cats: dict[str, dict[str, list[bool]]] = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in results:
+        m = _CAT_ID.match(r.item_id)
+        if not m:
+            return {}
+        if not is_error(r):
+            cats[m.group(1)][r.model].append(r.verdict)
+    return {c: {mo: (sum(v) / len(v) if v else None) for mo, v in per.items()} for c, per in cats.items()}
 
 
 def failure_shortlist(results: list[EvalResult], weak: str, strong: str, k: int = 5) -> list[dict]:
@@ -254,6 +272,14 @@ def score_table(results: list[EvalResult], models: list[str], baseline: str) -> 
         lo, hi = c["ci95"]
         lines.append(f"| `{c['b']}` | {c['delta']:+.1%} | [{lo:+.1%}, {hi:+.1%}] "
                      f"| {c['mcnemar_p']:.3g} | {c['b_only']}/{c['a_only']} | {c['n_paired']} | {c['excluded']} |")
+    cats = by_category(results, models)
+    if cats:
+        lines += ["", "By category:", "",
+                  "| category | " + " | ".join(f"`{m.split('/')[-1]}`" for m in models) + " |",
+                  "|---|" + "---|" * len(models)]
+        for c in sorted(cats):
+            cells = [f"{cats[c][m]:.0%}" if cats[c].get(m) is not None else "n/a" for m in models]
+            lines.append(f"| {c} | " + " | ".join(cells) + " |")
     tax = failure_taxonomy(results, models)
     kinds = [k for k in FAILURE_KINDS if any(k in t for t in tax.values())] + \
             (["other"] if any("other" in t for t in tax.values()) else [])
@@ -269,7 +295,7 @@ def score_table(results: list[EvalResult], models: list[str], baseline: str) -> 
         if a["acc"] is not None:
             name = a["model"][-34:]
             bars.append(f"{name:>34} {'#' * round(a['acc'] * 40):<40} {a['acc']:.1%}")
-    return {"accuracy": accs, "paired": comps, "taxonomy": tax,
+    return {"accuracy": accs, "paired": comps, "taxonomy": tax, "by_category": cats,
             "markdown": "\n".join(lines), "ascii": "\n".join(bars)}
 
 
@@ -282,7 +308,10 @@ def persist(results: list[EvalResult], table: dict, *, benchmark: str, models: l
     payload = {"eval_run_id": run_id, "benchmark": benchmark, "models": models,
                "created_at": time.time(), "table": table,
                "items": [asdict(r) for r in results]}
-    (RUNS_DIR / f"{run_id}.json").write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    # Atomic: readers (tests, A's dashboard) must never see a half-written run file.
+    tmp = RUNS_DIR / f".{run_id}.json.tmp"
+    tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    tmp.replace(RUNS_DIR / f"{run_id}.json")
     if db_path and Path(db_path).exists():
         con = sqlite3.connect(db_path, timeout=60)    # shared with A's server + gen_traces
         try:

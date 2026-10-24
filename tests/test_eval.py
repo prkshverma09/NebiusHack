@@ -118,6 +118,14 @@ def test_real_eval_failures_all_classified():
     assert fails and not other, other[:5]
 
 
+def test_by_category():
+    R = ev.EvalResult
+    res = [R("simple_1", "m", True, "", 1, 1), R("simple_2", "m", False, "", 1, 1),
+           R("parallel_multiple_7", "m", True, "", 1, 1), R("parallel_multiple_9", "m", False, "error:x", 0, 0)]
+    assert ev.by_category(res, ["m"]) == {"simple": {"m": 0.5}, "parallel_multiple": {"m": 1.0}}
+    assert ev.by_category([R("8bec48960de4", "m", True, "", 1, 1)], ["m"]) == {}   # hash ids
+
+
 def test_4xx_is_not_retried():
     c = FakeClient({"m": set()})
     c.down = set()

@@ -33,7 +33,10 @@ def main() -> int:
     ap.add_argument("--models", required=True, help="comma-separated model ids")
     ap.add_argument("--baseline", help="model the others are paired against (default: first)")
     ap.add_argument("--holdout", default=str(DEFAULT_HOLDOUT))
-    ap.add_argument("--task", default="toolace", help="grader registry key")
+    ap.add_argument("--bench", choices=["holdout", "bfcl"], default="holdout",
+                    help="holdout = ToolACE held-out JSONL; bfcl = BFCL v3 cross-distribution slice")
+    ap.add_argument("--per-category", type=int, default=40, help="bfcl only")
+    ap.add_argument("--task", default=None, help="grader key (default: toolace, or bfcl with --bench bfcl)")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=16)
     args = ap.parse_args()
@@ -44,16 +47,21 @@ def main() -> int:
     if baseline not in models:
         ap.error("--baseline must be one of --models")
 
-    items = load_holdout(args.holdout, args.limit)
-    print(f"[eval] {len(items)} items x {len(models)} models, grader={args.task}, baseline={baseline}")
+    if args.bench == "bfcl":
+        from traceforge.data.bfcl import load_bfcl
+        items = load_bfcl(per_category=args.per_category)[: args.limit]
+        task, benchmark = args.task or "bfcl", f"bfcl-v3-x{args.per_category}"
+    else:
+        items = load_holdout(args.holdout, args.limit)
+        task, benchmark = args.task or "toolace", Path(args.holdout).parent.name
+    print(f"[eval] {len(items)} items x {len(models)} models, bench={benchmark}, grader={task}, baseline={baseline}")
     client = OpenAI(api_key=s.nebius_api_key, base_url=s.upstream_base_url, timeout=90, max_retries=0)
-    results = run_eval(models, items, get_grader(args.task), client, workers=args.workers)
+    results = run_eval(models, items, get_grader(task), client, workers=args.workers)
 
     table = score_table(results, models, baseline)
     # Print before persisting: a locked DB must not swallow the numbers.
     print("\n" + table["markdown"] + "\n\n" + table["ascii"], flush=True)
-    run_id = persist(results, table, benchmark=Path(args.holdout).parent.name,
-                     models=models, db_path=s.db_path)
+    run_id = persist(results, table, benchmark=benchmark, models=models, db_path=s.db_path)
     scored = [a for a in table["accuracy"] if a["acc"] is not None]
     strong = max(scored, key=lambda a: a["acc"]) if scored else None
     if strong and strong["model"] != baseline:
