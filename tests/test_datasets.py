@@ -5,8 +5,12 @@ import json
 
 import pytest
 
-import traceforge.datasets as ds
-from traceforge.db import DB
+# traceforge/db.py is A-owned. Until it is committed, skip loudly rather than fail
+# collection — a collection error aborts the WHOLE pytest session, not just this file.
+pytest.importorskip("traceforge.db", reason="needs Hacker A's traceforge/db.py (not yet committed)")
+
+import traceforge.datasets as ds  # noqa: E402
+from traceforge.db import DB  # noqa: E402
 
 M = "teacher"
 
