@@ -115,7 +115,18 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.get("/stats/cost")
     def cost():
-        return {"by_model": svc.db.cost_by_model()}
+        """Priced from recorded tokens x live list price for EVERY row. B's runner rows
+        carry tokens but no cost_usd; summing cost_usd skipped them and showed the
+        teacher as cheaper than the student. Unpriceable rows are counted, not hidden."""
+        out = []
+        for r in svc.db.cost_by_model():
+            usd = svc.gateway.prices.cost_usd(r["model"], {
+                "prompt_tokens": r["prompt_tokens"] or 0,
+                "completion_tokens": r["completion_tokens"] or 0})
+            out.append({**r, "usd": usd,
+                        "usd_per_call": usd / r["n"] if usd is not None and r["n"] else None,
+                        "priced": usd is not None})
+        return {"by_model": out}
 
     @app.get("/jobs")
     def jobs():

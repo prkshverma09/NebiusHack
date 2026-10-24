@@ -139,10 +139,13 @@ function renderCost(rows) {
   if (!rows.length) return;
   el.className = "";
   el.innerHTML = `<table><tr><th>model</th><th class="num">calls</th><th class="num">graded</th>
-    <th class="num">correct</th><th class="num">tokens in / out</th><th class="num">spend</th></tr>` +
+    <th class="num">accuracy</th><th class="num">tokens in / out</th><th class="num">spend</th>
+    <th class="num">per 1k calls</th></tr>` +
     rows.map(r => `<tr><td>${short(r.model)}</td><td class="num">${r.n}</td><td class="num">${r.n_graded}</td>
-      <td class="num">${r.n_correct}</td><td class="num">${(r.prompt_tokens ?? 0).toLocaleString()} / ${(r.completion_tokens ?? 0).toLocaleString()}</td>
-      <td class="num">${usd(r.usd)}</td></tr>`).join("") + "</table>";
+      <td class="num">${r.n_graded ? pct(r.n_correct / r.n_graded) : "—"}</td>
+      <td class="num">${(r.prompt_tokens ?? 0).toLocaleString()} / ${(r.completion_tokens ?? 0).toLocaleString()}</td>
+      <td class="num">${usd(r.usd)}</td>
+      <td class="num">${r.usd_per_call == null ? "unpriced" : "$" + (r.usd_per_call * 1000).toFixed(3)}</td></tr>`).join("") + "</table>";
 }
 
 let jobsTick = 0;
