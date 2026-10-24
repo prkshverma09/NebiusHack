@@ -1,7 +1,7 @@
 # TraceForge PRD — Technical Review & Findings
 
 **Reviewed:** 2026-10-24, 13:05 BST (hackathon day, mid-build)
-**Against:** `spec/prd-traceforge.html` @ commit `392a149`
+**Against:** `spec/prd-traceforge.html` @ commit `392a149` (v1); TF-12/TF-13 added 13:25 against `c8436f6` (v2)
 **Method:** every platform claim re-checked against Nebius Token Factory docs; competitor and
 prior-art sweep via web research; mubit.ai landing page + `llms.txt` read directly.
 
@@ -31,8 +31,10 @@ prior-art sweep via web research; mubit.ai landing page + `llms.txt` read direct
 | TF-07 | `MEDIUM` | `POST /v0/models` (deploy checkpoint) is the one unverified API call in the PRD, and the whole demo sits behind it. |
 | TF-08 | `MEDIUM` | No `NEBIUS_API_KEY` provisioned at time of review. Nothing can start until it exists. |
 | TF-09 | `LOW` | 1,500 teacher traces is more than the remaining window supports. 300–400 is sufficient. |
-| TF-10 | `INFO` | Nebius **already markets distillation** and ships a Custom Speculator API. Position accordingly — novelty is not the pitch. |
+| TF-10 | `INFO` | Nebius **already markets distillation** and ships a Custom Speculator API. Position accordingly — novelty is not the pitch. **Partially corrected — see TF-12.** |
 | TF-11 | `UNVERIFIED` | Fine-tune queue wall-clock, fine-tune pricing, and whether Nebius has an internal router/eval product. |
+| TF-12 | `CORRECTION` | **Token Factory already has trace capture.** Inference Logs are collected automatically, and Data Lab builds datasets from them via SQL. The real gap is far narrower and much sharper: **there is no verdict field.** |
+| TF-13 | `HIGH` | PRD v2 (`c8436f6`) roughly doubles scope — two benchmarks, two LoRA jobs, shadow mode, promotion gate — while remaining time fell to ~3h. |
 
 ---
 
@@ -224,9 +226,14 @@ Checked, because "is this new to the platform?" determines the pitch:
   **speculative cascades**, DeepSeek-R1-Distill.
 
 **Therefore novelty is not available as a pitch, and should not be attempted.** The defensible claim is
-the *gap*: Nebius has the training primitives and — as far as any public route shows — **no capture, no
-eval harness, no router**. We built the front half of their own funnel and hand off into their existing
-SFT API.
+the *gap*.
+
+> ⚠️ **This section's description of the gap was wrong and is superseded by TF-12.** It claimed Nebius
+> has "no capture, no eval harness, no router." Nebius *does* have capture — automatic Inference Logs
+> plus Data Lab. Read TF-12 for the corrected, narrower gap. The keyword searches behind this paragraph
+> ("observability", "trace capture", "evals") missed it because Nebius files it under *Datasets*; a
+> depth-2 site map found it immediately. Searching with my own vocabulary rather than the platform's is
+> what produced the error.
 
 A credible platform ask to raise with Nebius staff on the day: **expose teacher logprobs on serverless
 inference.** Their speculator API trains on KL against teacher distributions, but the chat API returns
@@ -248,6 +255,90 @@ ours, so the asks go out early.
 5. Does Token Factory have an **internal or unreleased router / eval product**? If yes, TF-10's
    positioning needs rework. Research found no public route, which is **not** the same as "it does not
    exist."
+
+---
+
+## TF-12 `CORRECTION` — Nebius already has capture. The gap is the verdict.
+
+**This supersedes part of TF-10.** Checked at 13:20 against
+`docs.tokenfactory.nebius.com/data-lab/*` and `/ai-models-inference/observability`.
+
+**What Token Factory already has — more than TF-10 credited:**
+
+- **Inference Logs**: *"automatically collected chat completions generated via API or Playground
+  (unless Zero Data Retention is enabled)."* Capture is **on by default**. No gateway required.
+- **Data Lab**: a unified workspace over inference logs and datasets, with *"a unified interface for
+  preparing datasets via SQL queries"* and *"create datasets from inference logs … select a time range
+  and model."*
+- **Inference Observability**: latency p50/p90/p99, TTFT, output TPS, KV-cache hit rate, error rate by
+  status code, GPU utilisation, active replicas. **Caveat: *"Observability Metrics are only accessible
+  for Dedicated Endpoints inference"*** — serverless users get none of it.
+
+So "we built the missing front half of their funnel" is **not true** and must not be said on stage —
+Nebius will know, and it is the one claim a Nebius judge is best placed to demolish.
+
+**The actual gap, and it is a single column.** The fields Data Lab imports from inference logs are:
+
+```
+id, choice_id, prompt, completion, dialogue, started, completed,
+raw_prompt, raw_completion, completion_tokens, prompt_tokens,
+ai_project_id, model_flavor_id, tenant_user_account_id, error_string
+```
+
+There is **no verdict, grade or outcome field.** `error_string` is transport-level only. Token Factory
+records *what was said* and *whether the call succeeded* — never *whether the answer was right*. You can
+filter logs by model and time range; you cannot write `WHERE verdict = 'correct'`, because that column
+does not exist.
+
+That single absence breaks the loop, because grade-filtering is what separates distillation from
+imitation — train on all teacher traces and you copy its mistakes too.
+
+**The platform ask, in one sentence:** *add a writable, SQL-filterable `verdict` field to inference
+logs.* Then Data Lab's existing SQL dataset builder becomes a distillation dataset builder, and the
+whole loop closes inside Token Factory with no new product surface.
+
+**Ranked novelty for the platform** (strongest first):
+
+| # | Gap | Status |
+|---|---|---|
+| 1 | **Verdict/outcome on inference logs** — graded, SQL-filterable | Genuinely absent; one column; highest-value ask |
+| 2 | **Task fingerprinting** — group logs by task shape (system + tools + output format) | Data Lab filters by *model* and *time*, never by task. PRD v2's fingerprint is a real addition |
+| 3 | **Shadow mode / promotion gate** — prove a candidate on live traffic, then swap, with rollback | No safe-swap primitive found. Bedrock has built-in eval; Nebius does not appear to |
+| 4 | **Teacher logprobs on serverless inference** | Their speculator trains on `loss: {"type": "kl"}` against teacher distributions, but the chat API returns only truncated top-k — customers cannot replicate the recipe Nebius uses internally |
+| 5 | **Router** | No public route found |
+| — | Trace capture, dataset-from-logs, distillation, SFT/LoRA, observability metrics | **Already shipped. Claim none of these.** |
+
+**Revised pitch:** *"Token Factory already logs every chat completion and Data Lab already turns logs
+into a dataset with SQL. The one column it doesn't have is whether the answer was right — so you can
+filter by model and by time, but never by correctness. We added that column and closed the loop."*
+
+That is specific, respectful of what they built, obviously implementable, and credits them with 90% of
+the pipeline — a far stronger position than claiming to have filled a hole they do not have.
+
+---
+
+## TF-13 `HIGH` — PRD v2 raised scope while the clock fell
+
+PRD v2 (`c8436f6`) adds a second benchmark (Spider text-to-SQL with exec-match grading), a second LoRA
+job, shadow mode, a promotion gate, and task fingerprinting. Scope roughly doubled. Remaining time at
+the moment v2 landed: **~3h09m**.
+
+Credit where due — v2 is a better *product* than v1, and it already cites the Data Lab thesis (*"your
+best dataset is already in your logs"*), which is the right instinct and precedes TF-12.
+
+But the additions multiply the exposure to TF-02's single unmeasured variable. Two LoRA jobs do not
+halve queue risk, they double the number of things that must clear it. And **exec-match SQL grading
+needs a live SQLite database per Spider item** — a second grader, with its own failure modes, on the
+critical path that already gates everything.
+
+**Recommendation:** keep v2 as the *narrative* and ship v1's scope. One task (BFCL), one LoRA job on
+8B. Add the second task only once the first adapter is deployed and evaluated. Shadow mode is a
+dashboard ticker over machinery that must already work — it is the last thing to build, not a parallel
+track.
+
+If the fleet story matters for the pitch, say it as roadmap: *"the fingerprint makes this per-task
+automatically; we promoted one specialist today."* One promoted specialist with real numbers beats two
+half-trained ones with a missing score table.
 
 ---
 
