@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from traceforge.config import REPO_ROOT, Settings, load_settings
 from traceforge.costs import PriceTable
 from traceforge.db import DB
-from traceforge.gateway import Gateway, GoldIndex
+from traceforge.gateway import Gateway, GoldIndex, load_regions
 from traceforge.orchestrator import Orchestrator, OrchestratorError
 from traceforge.router import GateError, demote, promote, to_shadow
 
@@ -42,7 +42,8 @@ class Services:
         from traceforge.graders import get_grader   # B-owned registry
         gw = Gateway(db=db, prices=prices, upstream_base_url=s.upstream_base_url,
                      api_key=s.nebius_api_key, gold=GoldIndex.from_holdouts(HOLDOUTS),
-                     grader_for=get_grader)
+                     grader_for=get_grader,
+                     regions=load_regions(REPO_ROOT / "data" / "endpoints.jsonl"))
         return cls(settings=s, db=db, gateway=gw, orchestrator=Orchestrator(s))
 
 

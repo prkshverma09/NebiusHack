@@ -284,3 +284,42 @@ def test_endpoint_table_end_to_end(client):
     assert c.post(f"/models/{mid}/demote").status_code == 200
     assert c.get("/jobs/ftjob-1").json()["status"] == "running"
     assert c.post("/distill", json={"dataset_id": "missing"}).status_code == 404
+
+
+# ---- dedicated endpoints are served from a region-specific data plane (docs: deploy-api)
+def test_dedicated_routing_key_goes_to_its_region(tmp_path):
+    seen = []
+
+    def handler(req):
+        seen.append(str(req.url))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "x"}}]})
+    gw = make_gateway(tmp_path, handler)
+    gw.regions = {"dedicated/Qwen/Qwen3-30B-A3B-Instruct-2507-abc": "us-central1"}
+
+    async def go():
+        await gw.proxy(body("dedicated/Qwen/Qwen3-30B-A3B-Instruct-2507-abc"))
+        await gw.proxy(body("teacher/T"))
+    asyncio.run(go())
+    assert seen == ["https://api.tokenfactory.us-central1.nebius.com/v1/chat/completions",
+                    "https://upstream.test/v1/chat/completions"]
+
+
+def test_unknown_region_is_a_recorded_error_not_a_guess(tmp_path):
+    up = FakeUpstream()
+    gw = make_gateway(tmp_path, up)
+
+    async def go():
+        st, raw, _ = await gw.proxy(body("dedicated/never-recorded"))
+        return st, raw, await settle(gw.db, 1)
+    st, raw, rows = asyncio.run(go())
+    assert st == 502 and "no region recorded" in json.loads(raw)["error"]["message"]
+    assert up.requests == [] and rows[0]["grade"] == "error"
+
+
+def test_load_regions_reads_endpoint_log(tmp_path):
+    from traceforge.gateway import load_regions
+    log = tmp_path / "endpoints.jsonl"
+    log.write_text(json.dumps({"name": "p", "response": {"endpoint": {
+        "routing_key": "dedicated/x-1", "region": "eu-north1"}}}) + "\n")
+    assert load_regions(log) == {"dedicated/x-1": "eu-north1"}
+    assert load_regions(tmp_path / "missing.jsonl") == {}

@@ -29,6 +29,25 @@ from traceforge.router import pick_upstream, shadow_model
 log = logging.getLogger("traceforge.gateway")
 
 
+class UnknownRegionError(LookupError):
+    """A dedicated routing key whose region was never recorded; guessing a domain
+    would just turn into a confusing 404 from the wrong data plane."""
+
+    def __str__(self) -> str:
+        return f"no region recorded for dedicated endpoint {self.args[0]!r} (see data/endpoints.jsonl)"
+
+
+def load_regions(path: Path) -> dict[str, str]:
+    """routing_key -> region from scripts/endpoints.py's deploy log."""
+    out: dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            ep = (json.loads(line).get("response") or {}).get("endpoint") or {}
+            if ep.get("routing_key") and ep.get("region"):
+                out[ep["routing_key"]] = ep["region"]
+    return out
+
+
 def item_id(messages: list[dict]) -> str:
     """Same id as B's eval.load_holdout: sha256 of the prompt messages, sort_keys."""
     prompt = [m for m in messages if m.get("role") != "assistant"] \
@@ -65,6 +84,17 @@ class Gateway:
     grader_for: callable           # task name -> Grader (B's registry); raises if unknown
     client: httpx.AsyncClient | None = None
     _pending: set = field(default_factory=set)   # keeps shadow tasks alive until done
+    # routing_key -> region. Dedicated endpoints are served from a region-specific data
+    # plane (docs: deploy-api), NOT the shared api.tokenfactory.nebius.com host.
+    regions: dict = field(default_factory=dict)
+
+    def chat_url(self, model: str) -> str:
+        if model.startswith("dedicated/"):
+            region = self.regions.get(model)
+            if region is None:
+                raise UnknownRegionError(model)
+            return f"https://api.tokenfactory.{region}.nebius.com/v1/chat/completions"
+        return f"{self.upstream_base_url.rstrip('/')}/chat/completions"
 
     def _client(self) -> httpx.AsyncClient:
         if self.client is None:
@@ -89,12 +119,12 @@ class Gateway:
         t0 = time.time()
         try:
             r = await self._client().post(
-                f"{self.upstream_base_url.rstrip('/')}/chat/completions", content=body,
+                self.chat_url(routed), content=body,
                 headers={"Authorization": f"Bearer {self.api_key}",
                          "Content-Type": "application/json"})
             status, raw = r.status_code, r.content
             ctype = r.headers.get("content-type", "application/json")
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, UnknownRegionError) as e:
             # Unreachable upstream is a recorded failure, not a missing trace.
             status, ctype = 502, "application/json"
             raw = json.dumps({"error": {"type": "upstream_unreachable",
@@ -118,10 +148,10 @@ class Gateway:
         t0 = time.time()
         try:
             r = await self._client().post(
-                f"{self.upstream_base_url.rstrip('/')}/chat/completions", json=payload,
+                self.chat_url(payload["model"]), json=payload,
                 headers={"Authorization": f"Bearer {self.api_key}"})
             status, raw = r.status_code, r.content
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, UnknownRegionError) as e:
             status = 502
             raw = json.dumps({"error": {"type": "upstream_unreachable",
                                         "message": f"{type(e).__name__}: {e}"}}).encode()
