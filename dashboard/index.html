@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceForge</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b35; --ink:#e6e8ec; --dim:#8a93a3;
+          --ok:#3ecf8e; --bad:#ef5a5a; --err:#e0a63a; --na:#59606d; --accent:#7aa2ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex;
+           align-items:baseline; gap:16px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; letter-spacing:.2px; }
+  .tag { color:var(--dim); }
+  main { padding:20px 24px; display:grid; gap:18px;
+         grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  section.wide { grid-column:1/-1; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:var(--dim); margin:0 0 12px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; font-size:12px; }
+  td.num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
+  .clip { max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .v { display:inline-block; min-width:78px; text-align:center; padding:2px 8px; border-radius:99px;
+       font-size:12px; font-weight:600; }
+  .v.correct { background:rgba(62,207,142,.15); color:var(--ok); }
+  .v.incorrect { background:rgba(239,90,90,.15); color:var(--bad); }
+  .v.error { background:rgba(224,166,58,.15); color:var(--err); }
+  .v.none { background:rgba(89,96,109,.2); color:var(--na); }
+  .bar { height:10px; background:var(--line); border-radius:5px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  .big { font-size:28px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .kpis { display:flex; gap:28px; flex-wrap:wrap; }
+  .kpi small { display:block; color:var(--dim); font-size:12px; }
+  .empty { color:var(--dim); padding:8px 0; }
+  .stale { color:var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>TraceForge</h1>
+  <span class="tag">Token Factory logs what was said. This column records whether it was right.</span>
+  <span class="tag" id="updated"></span>
+</header>
+<main>
+  <section>
+    <h2>Verdicts</h2>
+    <div class="kpis" id="kpis"><div class="empty">no traces yet</div></div>
+  </section>
+  <section>
+    <h2>Fine-tuning jobs</h2>
+    <div id="jobs" class="empty">loading…</div>
+  </section>
+  <section class="wide">
+    <h2>Held-out eval — latest run</h2>
+    <div id="evals" class="empty">no eval runs yet</div>
+  </section>
+  <section class="wide">
+    <h2>Live trace feed</h2>
+    <div id="traces" class="empty">send a request to /v1/chat/completions</div>
+  </section>
+  <section class="wide">
+    <h2>Cost by model (Token Factory list prices)</h2>
+    <div id="cost" class="empty">—</div>
+  </section>
+</main>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct = x => x == null ? "—" : (x * 100).toFixed(1) + "%";
+const usd = x => x == null ? "unpriced" : "$" + x.toFixed(x < 0.01 ? 5 : 3);
+const short = m => esc(String(m ?? "").split("/").pop());
+const verdict = g => `<span class="v ${g || "none"}">${g || "ungraded"}</span>`;
+
+async function get(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path} -> HTTP ${r.status}`);
+  return r.json();
+}
+
+function renderTraces(rows) {
+  const el = document.getElementById("traces");
+  if (!rows.length) { el.className = "empty"; el.textContent = "send a request to /v1/chat/completions"; return; }
+  el.className = "";
+  el.innerHTML = `<table><tr><th>verdict</th><th>model</th><th>request</th><th>answer</th>
+    <th class="num">latency</th><th class="num">cost</th><th>detail</th></tr>` +
+    rows.slice(0, 40).map(t => `<tr><td>${verdict(t.grade)}</td><td>${short(t.model)}</td>
+      <td class="clip" title="${esc(t.user)}">${esc(t.user)}</td>
+      <td class="clip mono" title="${esc(t.answer)}">${esc(t.answer)}</td>
+      <td class="num">${t.latency_ms ?? "—"} ms</td><td class="num">${usd(t.cost_usd)}</td>
+      <td class="mono clip" title="${esc(t.grade_detail)}">${esc(t.grade_detail)}</td></tr>`).join("") + "</table>";
+}
+
+function renderKpis(rows) {
+  const n = rows.length, c = rows.filter(t => t.grade === "correct").length,
+        bad = rows.filter(t => t.grade === "incorrect").length,
+        err = rows.filter(t => t.grade === "error").length, graded = c + bad;
+  if (!n) return;
+  document.getElementById("kpis").innerHTML = [
+    ["traces", n], ["graded", graded], ["accuracy", graded ? pct(c / graded) : "—"],
+    ["wrong", bad], ["errors", err]].map(([k, v]) =>
+      `<div class="kpi"><div class="big">${v}</div><small>${k}</small></div>`).join("");
+}
+
+function renderEvals(runs) {
+  const el = document.getElementById("evals");
+  if (!runs.length) return;
+  const r = runs[0];
+  el.className = "";
+  const accs = r.accuracy.filter(a => a.acc != null);
+  el.innerHTML = `<div class="tag mono">${esc(r.eval_run_id)} · ${esc(r.benchmark)} ·
+      ${new Date(r.created_at * 1000).toLocaleTimeString()}</div>
+    <table><tr><th>model</th><th style="width:40%"></th><th class="num">accuracy</th>
+      <th class="num">correct / n</th><th class="num">p50 latency</th></tr>` +
+    accs.map(a => `<tr><td>${short(a.model)}</td>
+      <td><div class="bar"><i style="width:${(a.acc * 100).toFixed(1)}%"></i></div></td>
+      <td class="num">${pct(a.acc)}</td><td class="num">${a.correct}/${a.n}</td>
+      <td class="num">${a.median_latency_ms ?? "—"} ms</td></tr>`).join("") + `</table>` +
+    (r.paired || []).filter(p => p.delta != null).map(p =>
+      `<p class="tag">${short(p.b)} vs ${short(p.a)}: Δ ${(p.delta * 100).toFixed(1)} pts,
+       95% CI [${(p.ci95[0]*100).toFixed(1)}, ${(p.ci95[1]*100).toFixed(1)}],
+       McNemar p = ${p.mcnemar_p.toPrecision(2)}, n = ${p.n_paired} paired</p>`).join("");
+}
+
+function renderJobs(jobs) {
+  const el = document.getElementById("jobs");
+  if (!jobs.length) { el.textContent = "no jobs submitted"; return; }
+  el.className = "";
+  el.innerHTML = `<table><tr><th>base model</th><th>status</th><th class="num">trained tokens</th></tr>` +
+    jobs.map(j => `<tr><td>${short(j.model)}</td><td>${esc(j.status)}${j.error ? ` <span class="stale">${esc(JSON.stringify(j.error))}</span>` : ""}</td>
+      <td class="num">${(j.trained_tokens ?? 0).toLocaleString()}</td></tr>`).join("") + "</table>";
+}
+
+function renderCost(rows) {
+  const el = document.getElementById("cost");
+  if (!rows.length) return;
+  el.className = "";
+  el.innerHTML = `<table><tr><th>model</th><th class="num">calls</th><th class="num">graded</th>
+    <th class="num">correct</th><th class="num">tokens in / out</th><th class="num">spend</th></tr>` +
+    rows.map(r => `<tr><td>${short(r.model)}</td><td class="num">${r.n}</td><td class="num">${r.n_graded}</td>
+      <td class="num">${r.n_correct}</td><td class="num">${(r.prompt_tokens ?? 0).toLocaleString()} / ${(r.completion_tokens ?? 0).toLocaleString()}</td>
+      <td class="num">${usd(r.usd)}</td></tr>`).join("") + "</table>";
+}
+
+let jobsTick = 0;
+async function refresh() {
+  const upd = document.getElementById("updated");
+  try {
+    const [tr, ev, co] = await Promise.all([get("/traces?limit=200"), get("/evals"), get("/stats/cost")]);
+    renderTraces(tr.traces); renderKpis(tr.traces); renderEvals(ev.runs); renderCost(co.by_model);
+    if (jobsTick++ % 6 === 0) renderJobs((await get("/jobs")).jobs);   // every 30 s
+    upd.className = "tag"; upd.textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    upd.className = "stale"; upd.textContent = "refresh failed: " + e.message;   // never a silent blank
+  }
+}
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>
