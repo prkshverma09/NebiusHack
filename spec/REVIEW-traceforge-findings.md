@@ -15,6 +15,7 @@ prior-art sweep via web research; mubit.ai landing page + `llms.txt` read direct
 | `LOW` | Tuning / polish |
 | `VERIFIED-OK` | Checked against primary source, PRD is correct |
 | `UNVERIFIED` | Nobody has checked this; needs a day-0 test or a Nebius mentor |
+| `CORRECTION` | An earlier finding in this document was wrong; this entry supersedes it |
 
 ---
 
