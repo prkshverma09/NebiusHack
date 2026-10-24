@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0}</style>
+<title>TraceForge Eval Results</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: single reading column (~70ch) with full-width tables; summary first, evidence after. */
+:root {
+  --bg: #f6f8f8; --surface: #ffffff; --fg: #17222a; --muted: #5b6b74; --rule: #d9e1e4;
+  --student: #1f7a80; --teacher: #6a58b0; --mark: #ffe3a8; --mark-fg: #4a3200;
+  --good: #2e7d4f; --warn: #a15c00;
+  --display: "Newsreader", Georgia, "Times New Roman", serif;
+  --body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1619; --surface: #162026; --fg: #e3eaed; --muted: #93a4ad; --rule: #2a3840;
+  --student: #5cc3c9; --teacher: #ad9ff0; --mark: #5a4310; --mark-fg: #ffe7b3;
+  --good: #6fcf97; --warn: #f0b35a; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0f1619; --surface: #162026; --fg: #e3eaed; --muted: #93a4ad; --rule: #2a3840;
+  --student: #5cc3c9; --teacher: #ad9ff0; --mark: #5a4310; --mark-fg: #ffe7b3;
+  --good: #6fcf97; --warn: #f0b35a; color-scheme: dark; }
+
+body { background: var(--bg); color: var(--fg); font: 400 16px/1.6 var(--body); }
+.wrap { max-width: 880px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 44px; }
+section { display: grid; gap: 14px; min-width: 0; }
+h1, h2 { font-family: var(--display); font-weight: 600; text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(30px, 5vw, 42px); }
+h2 { font-size: 25px; }
+h3 { font: 600 15px/1.3 var(--body); margin: 0; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 18px; max-width: 64ch; }
+.muted { color: var(--muted); }
+code, .mono { font-family: var(--mono); font-size: .88em; }
+.student { color: var(--student); } .teacher { color: var(--teacher); }
+.key { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; color: var(--muted); }
+.key span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.key .s::before { background: var(--student); } .key .t::before { background: var(--teacher); }
+
+/* headline figures */
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.fig { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; display: grid; gap: 4px; align-content: start; }
+.fig b { font: 600 26px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.fig small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+
+/* bars, 0-100% scale */
+.chart { display: grid; gap: 18px; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 18px; }
+.group { display: grid; gap: 6px; }
+.row { display: grid; grid-template-columns: 108px 1fr 56px; align-items: center; gap: 10px; font-size: 13px; }
+.track { position: relative; height: 18px; background: repeating-linear-gradient(90deg, var(--rule) 0 1px, transparent 1px 25%); border-left: 1px solid var(--muted); }
+.bar { position: absolute; inset: 2px auto 2px 0; border-radius: 0 3px 3px 0; }
+.bar.s { background: var(--student); } .bar.t { background: var(--teacher); }
+.val { font: 500 13px var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.axis { display: grid; grid-template-columns: 108px 1fr 56px; gap: 10px; font: 11px var(--mono); color: var(--muted); }
+.axis div { display: flex; justify-content: space-between; }
+
+/* tables */
+.tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 600 12px var(--body); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); background: transparent; }
+tr:last-child td { border-bottom: 0; }
+td.n { text-align: right; font-family: var(--mono); font-size: 13px; }
+th.n { text-align: right; }
+.pill { display: inline-block; font: 500 12px var(--mono); padding: 1px 8px; border-radius: 99px; border: 1px solid currentColor; }
+.pill.ns { color: var(--muted); } .pill.warn { color: var(--warn); } .pill.good { color: var(--good); }
+
+/* pipeline */
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.step { border-top: 3px solid var(--rule); padding-top: 10px; display: grid; gap: 2px; }
+.step b { font: 600 22px var(--display); font-variant-numeric: tabular-nums; }
+.step small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+.step.kept { border-top-color: var(--good); } .step.cut { border-top-color: var(--warn); }
+
+/* replay */
+.cases { display: grid; gap: 14px; }
+.case { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.case .q { font-size: 14px; color: var(--muted); }
+.calls { display: grid; gap: 6px; min-width: 0; }
+.call { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: baseline; min-width: 0; }
+.call span { font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.call pre { margin: 0; font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; min-width: 0; }
+mark { background: var(--mark); color: var(--mark-fg); border-radius: 3px; padding: 0 2px; }
+.verdict { font: 500 12px var(--mono); }
+.verdict.no { color: var(--warn); } .verdict.ok { color: var(--good); }
+
+ul.claims { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 70ch; }
+.say, .dont { display: grid; gap: 10px; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.two > div { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+pre.cmd { margin: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px; font: 13px/1.6 var(--mono); overflow-x: auto; }
+footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 16px; }
+</style>
+
+<div class="wrap">
+
+<header style="display:grid;gap:14px">
+  <div class="eyebrow">TraceForge · Hacker B results · 24 Oct 2026, 15:47 BST</div>
+  <h1>A 30B model matches the 235B teacher at function calling</h1>
+  <p class="lede">On 450 held-out items across two benchmarks, <span class="student">Qwen3-30B-A3B</span> is statistically indistinguishable from <span class="teacher">Qwen3-235B-A22B</span>, at roughly a tenth of the latency. Every verdict is a deterministic comparison against an answer key. No model grades another model.</p>
+  <div class="key"><span class="s">Qwen3-30B-A3B-Instruct-2507 · student</span><span class="t">Qwen3-235B-A22B-Instruct-2507 · teacher</span></div>
+</header>
+
+<section aria-label="Headline figures">
+  <div class="figs">
+    <div class="fig"><span class="eyebrow">ToolACE held-out · 250</span><b>74.0% <span class="muted" style="font-size:18px">vs</span> 77.6%</b><small>Teacher +3.6 pts, 95% CI [0.0, +7.6], McNemar p = 0.093. Not significant.</small></div>
+    <div class="fig"><span class="eyebrow">BFCL v3 · 200</span><b>91.5% <span class="muted" style="font-size:18px">vs</span> 91.5%</b><small>Exact tie, 183/200 each. 4 items go each way. p = 1.</small></div>
+    <div class="fig"><span class="eyebrow">Median latency</span><b>428–553 ms <span class="muted" style="font-size:18px">vs</span> 3.8–10.4 s</b><small>Student is about an order of magnitude faster in both runs.</small></div>
+    <div class="fig"><span class="eyebrow">Verdict column</span><b>261 of 1,170</b><small>teacher answers graded wrong and kept out of the v2 training set (22.3%).</small></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Accuracy</div>
+  <h2>Two benchmarks, same answer</h2>
+  <p>ToolACE is the distribution the student is fine-tuned on. BFCL is a public benchmark it never trains on, rendered with the same system prompt, so a tie there means the result is not memorisation.</p>
+  <div class="chart" role="img" aria-label="Accuracy bars. ToolACE: student 74.0%, teacher 77.6%. BFCL: student 91.5%, teacher 91.5%.">
+    <div class="group">
+      <h3>ToolACE held-out <span class="muted" style="font-weight:400">· 250 items · in-distribution</span></h3>
+      <div class="row"><span class="student">30B student</span><div class="track"><div class="bar s" style="width:74.0%"></div></div><span class="val">74.0%</span></div>
+      <div class="row"><span class="teacher">235B teacher</span><div class="track"><div class="bar t" style="width:77.6%"></div></div><span class="val">77.6%</span></div>
+    </div>
+    <div class="group">
+      <h3>BFCL v3 <span class="muted" style="font-weight:400">· 200 items · cross-distribution</span></h3>
+      <div class="row"><span class="student">30B student</span><div class="track"><div class="bar s" style="width:91.5%"></div></div><span class="val">91.5%</span></div>
+      <div class="row"><span class="teacher">235B teacher</span><div class="track"><div class="bar t" style="width:91.5%"></div></div><span class="val">91.5%</span></div>
+    </div>
+    <div class="axis"><span></span><div><span>0</span><span>25</span><span>50</span><span>75</span><span>100%</span></div><span></span></div>
+  </div>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Benchmark</th><th>Model</th><th class="n">Correct</th><th class="n">Accuracy</th><th class="n">p50 latency</th><th class="n">Errors</th></tr></thead>
+    <tbody>
+      <tr><td>ToolACE held-out</td><td class="student">30B student</td><td class="n">185 / 250</td><td class="n">74.0%</td><td class="n">553 ms</td><td class="n">0</td></tr>
+      <tr><td></td><td class="teacher">235B teacher</td><td class="n">194 / 250</td><td class="n">77.6%</td><td class="n">10,360 ms</td><td class="n">0</td></tr>
+      <tr><td>BFCL v3</td><td class="student">30B student</td><td class="n">183 / 200</td><td class="n">91.5%</td><td class="n">428 ms</td><td class="n">0</td></tr>
+      <tr><td></td><td class="teacher">235B teacher</td><td class="n">183 / 200</td><td class="n">91.5%</td><td class="n">3,757 ms</td><td class="n">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Paired test (teacher vs student)</th><th class="n">Δ accuracy</th><th class="n">95% CI</th><th class="n">Teacher-only right</th><th class="n">Student-only right</th><th class="n">McNemar p</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>ToolACE held-out</td><td class="n">+3.6 pts</td><td class="n">[0.0, +7.6]</td><td class="n">16</td><td class="n">7</td><td class="n">0.093</td><td><span class="pill ns">not significant</span></td></tr>
+      <tr><td>BFCL v3</td><td class="n">0.0 pts</td><td class="n">[−3.0, +2.5]</td><td class="n">4</td><td class="n">4</td><td class="n">1.000</td><td><span class="pill ns">tie</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted" style="font-size:14px">McNemar uses only the items where the two models disagree, so both models see identical items and prompts. CI is a paired bootstrap over 2,000 resamples. Network failures would count as errors and be excluded, never scored wrong; there were none.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Where they struggle</div>
+  <h2>Same weak spots, both models</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>BFCL category</th><th class="n">Items</th><th class="n student">30B student</th><th class="n teacher">235B teacher</th></tr></thead>
+    <tbody>
+      <tr><td>simple <span class="muted">· one function, one call</span></td><td class="n">40</td><td class="n">92.5%</td><td class="n">97.5%</td></tr>
+      <tr><td>multiple <span class="muted">· pick one of several functions</span></td><td class="n">40</td><td class="n">97.5%</td><td class="n">95.0%</td></tr>
+      <tr><td>parallel <span class="muted">· same function, several calls</span></td><td class="n">40</td><td class="n">95.0%</td><td class="n">95.0%</td></tr>
+      <tr><td>parallel_multiple <span class="muted">· several functions, several calls</span></td><td class="n">40</td><td class="n"><strong>80.0%</strong></td><td class="n"><strong>82.5%</strong></td></tr>
+      <tr><td>irrelevance <span class="muted">· should call nothing</span></td><td class="n">40</td><td class="n">92.5%</td><td class="n">87.5%</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Failure type</th><th class="n student">ToolACE · 30B</th><th class="n teacher">ToolACE · 235B</th><th class="n student">BFCL · 30B</th><th class="n teacher">BFCL · 235B</th></tr></thead>
+    <tbody>
+      <tr><td>Right function, wrong argument value</td><td class="n">40</td><td class="n">32</td><td class="n">13</td><td class="n">10</td></tr>
+      <tr><td>Wrong number of calls</td><td class="n">11</td><td class="n">13</td><td class="n">1</td><td class="n">2</td></tr>
+      <tr><td>No call where one was needed</td><td class="n">7</td><td class="n">2</td><td class="n">0</td><td class="n">0</td></tr>
+      <tr><td>Called the wrong function</td><td class="n">4</td><td class="n">4</td><td class="n">0</td><td class="n">0</td></tr>
+      <tr><td>Required argument missing</td><td class="n">2</td><td class="n">5</td><td class="n">0</td><td class="n">0</td></tr>
+      <tr><td>Malformed call</td><td class="n">1</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+      <tr><td>Called a tool when it should abstain</td><td class="n">0</td><td class="n">0</td><td class="n">3</td><td class="n">5</td></tr>
+      <tr><td><strong>Total failures</strong></td><td class="n"><strong>65</strong></td><td class="n"><strong>56</strong></td><td class="n"><strong>17</strong></td><td class="n"><strong>17</strong></td></tr>
+    </tbody>
+  </table></div>
+  <p>Wrong argument values dominate for both models. On ToolACE, 49 items defeat both models; several of those look like answer-key conventions (an interest rate written as <code>4.5</code> vs <code>0.045</code>) rather than model mistakes.</p>
+</section>
+
+<section>
+  <div class="eyebrow">The verdict column</div>
+  <h2>Grading every teacher answer before training on it</h2>
+  <p>Token Factory already logs every completion and Data Lab turns logs into datasets. What a log does not record is whether the answer was right. We added that column: the teacher answered all 1,200 ToolACE training prompts, every answer was graded, and only the correct ones became training data.</p>
+  <div class="flow">
+    <div class="step"><b>1,200</b><small>teacher answers to training prompts</small></div>
+    <div class="step cut"><b>30</b><small>set aside: the answer key itself is malformed (2.5%), e.g. <code>name=&gt;(k="v"; …)</code></small></div>
+    <div class="step cut"><b>261</b><small>graded wrong and excluded</small></div>
+    <div class="step kept"><b>909</b><small>graded correct: 77.7% acceptance</small></div>
+    <div class="step kept"><b>818 + 91</b><small><code>toolace-verified-v2</code> train / validation</small></div>
+  </div>
+  <p class="muted" style="font-size:14px">Guards on v2: zero prompts shared with the ToolACE eval set (checked by hash; BFCL is a separate source and was not hash-checked); longest row 1,792 tokens against a 7,500 cap (median 626); 246 of the 818 rows are the teacher's own wording, not a copy of the answer key, which is what makes this distillation.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Replay these in the demo</div>
+  <h2>Where the student loses, it is usually a convention</h2>
+  <p>16 ToolACE items go to the teacher. Three typical ones, quoted exactly from the logged outputs:</p>
+  <div class="cases">
+    <div class="case">
+      <div class="q"><code>0efb3ca04181</code> · “The website is www.myonlinebookstore.com”</div>
+      <div class="calls">
+        <div class="call"><span>Key</span><pre>[check_webpage_status(url="www.myonlinebookstore.com")]</pre></div>
+        <div class="call"><span class="student">30B</span><pre>[check_webpage_status(url="<mark>http://</mark>www.myonlinebookstore.com")]</pre></div>
+        <div class="call"><span class="teacher">235B</span><pre>[check_webpage_status(url="www.myonlinebookstore.com")]</pre></div>
+      </div>
+      <div class="verdict no">30B: wrong_values:url · added a scheme the user never typed</div>
+    </div>
+    <div class="case">
+      <div class="q"><code>2a8c7b13fdef</code> · “Get the running and swimming activity data from my smart clothing device SC12345 for today”</div>
+      <div class="calls">
+        <div class="call"><span>Key</span><pre>… time_range={"start_time": "2025-09-12 00:00:00", "end_time": "2025-09-12 23:59:59"} …</pre></div>
+        <div class="call"><span class="student">30B</span><pre>… time_range={"start_time": "2025-09-12<mark>T</mark>00:00:00", "end_time": "2025-09-12<mark>T</mark>23:59:59"} …</pre></div>
+        <div class="call"><span class="teacher">235B</span><pre>… time_range={"start_time": "2025-09-12 00:00:00", "end_time": "2025-09-12 23:59:59"} …</pre></div>
+      </div>
+      <div class="verdict no">30B: wrong_values:time_range · ISO 8601 separator instead of the key's space</div>
+    </div>
+    <div class="case">
+      <div class="q"><code>39b352fe2e1f</code> · “Which countries are considered high-income?”</div>
+      <div class="calls">
+        <div class="call"><span>Key</span><pre>[List of Countries by Income Level<mark>()</mark>]</pre></div>
+        <div class="call"><span class="student">30B</span><pre>[List of Countries by Income Level]</pre></div>
+        <div class="call"><span class="teacher">235B</span><pre>[List of Countries by Income Level()]</pre></div>
+      </div>
+      <div class="verdict no">30B: dropped the parentheses, so it is not a call</div>
+    </div>
+  </div>
+  <p>These are the cases fine-tuning on the teacher's verified answers is meant to fix: format conventions, not reasoning.</p>
+</section>
+
+<section>
+  <div class="eyebrow">For the presenter</div>
+  <h2>How to say it</h2>
+  <div class="two">
+    <div><h3 style="color:var(--good)">Safe to claim</h3>
+      <ul class="claims">
+        <li>“On 450 held-out items, the 30B model is statistically indistinguishable from the 235B model.”</li>
+        <li>“It ties exactly on BFCL, a benchmark it never trained on.”</li>
+        <li>“About an order of magnitude lower latency.”</li>
+        <li>“No LLM-as-judge: every verdict is a comparison against an answer key.”</li>
+        <li>“1 in 4.5 teacher answers was wrong. The verdict column kept them out of training.”</li>
+      </ul></div>
+    <div><h3 style="color:var(--warn)">Don't claim</h3>
+      <ul class="claims">
+        <li>“The models are equal.” Say “indistinguishable at this sample size” and give p.</li>
+        <li>An exact speed multiple. Single runs under concurrency gave 18.7× and 8.8×.</li>
+        <li>Any fine-tuned (“pupil”) number. No fine-tuned model has been served yet.</li>
+        <li>That the teacher is better. +3.6 pts with a CI touching zero is not evidence.</li>
+      </ul></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Status</div>
+  <h2>What is not in these numbers</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Fine-tune job</th><th>Base model</th><th>Training data</th><th>Status at 15:47</th></tr></thead>
+    <tbody>
+      <tr><td><code>ftjob-70b3094d…</code></td><td>Qwen3-30B-A3B-Instruct-2507</td><td>raw ToolACE answer key (v1, 1,200 rows)</td><td><span class="pill warn">running · 0 tokens trained</span></td></tr>
+      <tr><td><code>ftjob-dc1fa2a7…</code></td><td>Llama-3.1-8B-Instruct</td><td>raw ToolACE answer key (v1)</td><td><span class="pill warn">running · 0 tokens trained</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>The Qwen job was submitted at 14:45 and the Llama job at 14:34; neither shows training progress. LoRA adapters can no longer be deployed serverlessly on Token Factory (HTTP 410), so a pupil needs a dedicated endpoint. <code>toolace-verified-v2</code> is built and not yet submitted. When a pupil is served, one command adds it as the third bar on both benchmarks.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Reproduce</div>
+  <h2>Commands and sources</h2>
+  <pre class="cmd">python scripts/run_eval.py --models Qwen/Qwen3-30B-A3B-Instruct-2507,Qwen/Qwen3-235B-A22B-Instruct-2507
+python scripts/run_eval.py --bench bfcl --per-category 40 --models Qwen/Qwen3-30B-A3B-Instruct-2507,Qwen/Qwen3-235B-A22B-Instruct-2507
+python scripts/gen_traces.py --model Qwen/Qwen3-235B-A22B-Instruct-2507 --items data/datasets/toolace-fc-v1/train.jsonl
+python -m traceforge.datasets --model Qwen/Qwen3-235B-A22B-Instruct-2507 --name toolace-verified-v2 \
+    --holdout data/datasets/toolace-fc-v1/holdout.jsonl --source runner</pre>
+  <p class="muted" style="font-size:14px">Runs: <code>data/evals/ev-f1890ed2.json</code> (ToolACE) and <code>data/evals/ev-faca1a75.json</code> (BFCL). Responses are cached per model and item, so re-running regrades without new API calls. Code: <code>prkshverma09/NebiusHack</code> @ <code>522463a</code>, 84 tests passing.</p>
+</section>
+
+<footer>Grader checks: on the real answer keys, known-correct answers pass and one-value perturbations fail in every case (ToolACE 250/250 and 238/238; BFCL 160/160 and 160/160). All figures recomputed from the saved run files at 15:47.</footer>
+
+</div>

@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0}</style>
+<title>TraceForge Deck</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=IBM+Plex+Mono:wght@400;500&display=block">
+<style>
+/* Layout: 1280x720 slide canvas, left-aligned 12-col feel, scaled to fit the viewport. One visual world: projected lab log. */
+:root {
+  --page: #ECEFF2; --slide: #F7F9FA; --ink: #15202A; --soft: #56636E; --line: #CDD5DB;
+  --ok: #1D8A57; --bad: #C0392B; --student: #1F7A80; --teacher: #6A58B0; --hl: #FFE6A6;
+  --sans: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: light;
+}
+html, body { height: 100%; }
+body { background: var(--page); color: var(--ink); font-family: var(--sans); overflow: hidden; }
+.stage { position: fixed; inset: 0; display: grid; place-items: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.deck { width: 1280px; height: 720px; position: relative; transform-origin: center; flex: none; }
+.slide { position: absolute; inset: 0; background: var(--slide); border: 1px solid var(--line); border-radius: 6px;
+  padding: 64px 80px 56px; display: none; flex-direction: column; gap: 24px; overflow: hidden; }
+.slide.on { display: flex; }
+.slide > .foot { position: absolute; left: 80px; right: 80px; bottom: 22px; display: flex; justify-content: space-between;
+  font: 400 14px var(--mono); color: var(--soft); }
+
+h1 { font: 800 92px/0.95 var(--sans); letter-spacing: -0.035em; margin: 0; }
+h2 { font: 700 50px/1.04 var(--sans); letter-spacing: -0.02em; margin: 0; max-width: 22ch; text-wrap: balance; }
+h3 { font: 700 22px/1.2 var(--sans); margin: 0; }
+p, li { font-size: 23px; line-height: 1.42; margin: 0; max-width: 52ch; }
+.small { font-size: 17px; color: var(--soft); max-width: 70ch; }
+code, .m { font-family: var(--mono); font-size: 0.86em; }
+.student { color: var(--student); } .teacher { color: var(--teacher); }
+.ok { color: var(--ok); } .bad { color: var(--bad); }
+.grow { flex: 1; min-height: 0; }
+.row { display: flex; gap: 40px; align-items: flex-start; }
+.col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+ul { margin: 0; padding-left: 26px; display: grid; gap: 12px; }
+
+/* log table: the deck's one recurring object */
+.log { width: 100%; border-collapse: collapse; table-layout: fixed; font: 15px/1.35 var(--mono); }
+.log th { text-align: left; font: 500 15px var(--sans); color: var(--soft); padding: 8px 12px; border-bottom: 2px solid var(--ink); }
+.log td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.log .gap { color: var(--line); font-size: 22px; }
+.log .vcol { width: 170px; }
+.log .mcol { width: 130px; }
+.v { display: inline-block; font: 500 14px var(--mono); padding: 2px 10px; border-radius: 4px; }
+.v.ok { background: #DCF1E6; } .v.bad { background: #F7DEDB; } .v.err { background: #EEE9D9; color: #7A5B00; }
+.reveal .vcell { opacity: 0; transform: translateX(-10px); }
+.slide.on.reveal .vcell { animation: fill .45s ease-out forwards; }
+.slide.on.reveal tr:nth-child(2) .vcell { animation-delay: .35s } .slide.on.reveal tr:nth-child(3) .vcell { animation-delay: .7s }
+.slide.on.reveal tr:nth-child(4) .vcell { animation-delay: 1.05s } .slide.on.reveal tr:nth-child(5) .vcell { animation-delay: 1.4s }
+.slide.on.reveal tr:nth-child(6) .vcell { animation-delay: 1.75s }
+.slide.on.reveal th.vcol { animation: hdr .4s ease-out forwards; }
+@keyframes fill { to { opacity: 1; transform: none; } }
+@keyframes hdr { from { color: var(--soft); } to { color: var(--ok); } }
+
+/* pipeline (a real sequence, so numbered) */
+.pipe { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0; border-top: 2px solid var(--ink); }
+.pipe > div { padding: 16px 16px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.pipe b { font: 500 15px var(--mono); color: var(--soft); }
+.pipe h3 { font-size: 21px; }
+.pipe p { font-size: 16px; line-height: 1.38; color: var(--soft); }
+.pipe .ours h3 { color: var(--ok); }
+
+/* bars */
+.bars { display: grid; gap: 26px; width: 100%; }
+.bgroup { display: grid; gap: 10px; }
+.brow { display: grid; grid-template-columns: 170px 1fr 92px; gap: 16px; align-items: center; font-size: 19px; }
+.track { height: 34px; position: relative; border-left: 2px solid var(--ink);
+  background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 25%); }
+.bar { position: absolute; inset: 4px auto 4px 0; }
+.bar.s { background: var(--student); } .bar.t { background: var(--teacher); }
+.bval { font: 500 22px var(--mono); text-align: right; }
+.axis { display: grid; grid-template-columns: 170px 1fr 92px; gap: 16px; font: 13px var(--mono); color: var(--soft); }
+.axis > div { display: flex; justify-content: space-between; }
+
+/* figures */
+.big { font: 800 118px/0.9 var(--sans); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.stat { display: flex; flex-direction: column; gap: 6px; }
+.stat .n { font: 700 54px/1 var(--sans); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat .l { font-size: 18px; color: var(--soft); max-width: 22ch; }
+
+table.t { border-collapse: collapse; font-size: 19px; font-variant-numeric: tabular-nums; }
+table.t th { text-align: left; font: 500 16px var(--sans); color: var(--soft); padding: 6px 18px 6px 0; border-bottom: 2px solid var(--ink); }
+table.t td { padding: 8px 18px 8px 0; border-bottom: 1px solid var(--line); }
+table.t td.n, table.t th.n { text-align: right; font-family: var(--mono); font-size: 18px; }
+table.t tr.hot td { font-weight: 700; }
+
+/* replay */
+.case { display: grid; grid-template-columns: 92px 1fr; gap: 6px 14px; font: 16px/1.4 var(--mono); }
+.case span { font: 500 15px var(--sans); color: var(--soft); }
+.case + .case { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+mark { background: var(--hl); color: var(--ink); padding: 0 2px; border-radius: 2px; }
+
+.findings td:first-child { font-family: var(--mono); font-size: 16px; color: var(--bad); white-space: nowrap; }
+.ask { border-left: 6px solid var(--ok); padding: 6px 0 6px 22px; }
+.ask p { font-size: 30px; line-height: 1.3; max-width: 40ch; font-weight: 500; }
+
+.nav { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(14px + env(safe-area-inset-bottom, 0px)); display: flex; gap: 8px; }
+.nav button { font: 500 14px var(--sans); background: var(--slide); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 8px 14px; cursor: pointer; }
+.nav button:focus-visible { outline: 3px solid var(--student); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .reveal .vcell { opacity: 1; transform: none; } .slide.on.reveal .vcell, .slide.on.reveal th.vcol { animation: none; } }
+</style>
+
+<div class="stage"><div class="deck" id="deck">
+
+<!-- 1 -->
+<section class="slide on" aria-label="Title">
+  <div class="grow" style="display:flex;flex-direction:column;justify-content:center;gap:30px">
+    <h1>TraceForge</h1>
+    <p style="font-size:34px;line-height:1.25;max-width:30ch;font-weight:500">Your inference logs record what the model said. We added the column that says whether it was right.</p>
+    <p class="small">Nebius Token Factory hackathon, 24 October 2026. Verified-trace distillation for function calling.</p>
+  </div>
+  <div class="foot"><span>TraceForge</span><span>1 / 12</span></div>
+</section>
+
+<!-- 2 -->
+<section class="slide" aria-label="The gap">
+  <h2>Token Factory already logs every completion</h2>
+  <p>Inference Logs capture each call. Data Lab turns logs into datasets with SQL. You can filter by model and by time. You can't filter by correctness, because nothing records it.</p>
+  <div class="grow" style="display:flex;align-items:center">
+    <table class="log">
+      <thead><tr><th class="mcol">model</th><th style="width:340px">request</th><th>response</th><th class="vcol">was it right?</th></tr></thead>
+      <tbody>
+        <tr><td>Qwen3-235B</td><td>Get running + swimming data for SC12345</td><td>[wearable.get_activity(device_id="SC12345", &#8230;)]</td><td class="gap">?</td></tr>
+        <tr><td>Qwen3-235B</td><td>Is www.myonlinebookstore.com down?</td><td>[check_webpage_status(url="www.myonl&#8230;")]</td><td class="gap">?</td></tr>
+        <tr><td>Qwen3-235B</td><td>Loan of 20000 at 4.5% over 5 years</td><td>[calculate_loan_amortization(interest_rate=4.5&#8230;)]</td><td class="gap">?</td></tr>
+        <tr><td>Qwen3-235B</td><td>Which countries are high-income?</td><td>[List of Countries by Income Level()]</td><td class="gap">?</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="foot"><span>The gap</span><span>2 / 12</span></div>
+</section>
+
+<!-- 3 -->
+<section class="slide" aria-label="What we built">
+  <h2>We built the loop around that missing column</h2>
+  <div class="grow" style="display:flex;align-items:center">
+    <div class="pipe">
+      <div><b>1</b><h3>Capture</h3><p>OpenAI-compatible proxy logs every call to a trace store.</p></div>
+      <div><b>2</b><h3>Fingerprint</h3><p>Groups calls by task: same system prompt and tools.</p></div>
+      <div class="ours"><b>3</b><h3>Grade</h3><p>Deterministic verdict per trace against an answer key. No model judges a model.</p></div>
+      <div class="ours"><b>4</b><h3>Curate</h3><p>Only verified answers become training rows. Leakage and token-cap guards.</p></div>
+      <div><b>5</b><h3>Distill</h3><p>LoRA fine-tune of a small open model on Token Factory.</p></div>
+      <div><b>6</b><h3>Promote</h3><p>Shadow the small model, compare, then promote or roll back.</p></div>
+    </div>
+  </div>
+  <p class="small">Steps 3 and 4 are the part the platform doesn't have. Everything else reuses Token Factory primitives: inference, files, fine-tuning jobs.</p>
+  <div class="foot"><span>What we built</span><span>3 / 12</span></div>
+</section>
+
+<!-- 4 -->
+<section class="slide reveal" aria-label="The verdict column">
+  <h2>The same log, with the verdict filled in</h2>
+  <div class="grow" style="display:flex;align-items:center">
+    <table class="log">
+      <thead><tr><th>request</th><th>teacher response</th><th>answer key</th><th class="vcol">verdict</th></tr></thead>
+      <tbody>
+        <tr><td>Running + swimming for SC12345</td><td>&#8230;"start_time": "2025-09-12 00:00:00"&#8230;</td><td>&#8230;"2025-09-12 00:00:00"&#8230;</td><td class="vcell"><span class="v ok">correct</span></td></tr>
+        <tr><td>Is www.myonlinebookstore.com down?</td><td>url="www.myonlinebookstore.com"</td><td>url="www.myonlinebookstore.com"</td><td class="vcell"><span class="v ok">correct</span></td></tr>
+        <tr><td>Loan of 20000 at 4.5%</td><td>interest_rate=4.5</td><td>interest_rate=0.045</td><td class="vcell"><span class="v bad">wrong value</span></td></tr>
+        <tr><td>Hockey managers, 3 matches</td><td>&#8230;(id=457), &#8230;(id=623)&#8230;</td><td>&#8230;(id=457.0), &#8230;(id=623.0)&#8230;</td><td class="vcell"><span class="v ok">correct</span></td></tr>
+        <tr><td>Competition schedule, Hawaii</td><td>[&#8230;]</td><td>{Fetcher.retrieveEvents}=&gt;(&#8230;; &#8230;)</td><td class="vcell"><span class="v err">bad answer key</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small">Numbers compare as numbers, so <code>457</code> matches <code>457.0</code>. A malformed answer key is flagged as a data problem and never counted against the model.</p>
+  <div class="foot"><span>The verdict column</span><span>4 / 12</span></div>
+</section>
+
+<!-- 5 -->
+<section class="slide" aria-label="Grading 1200 teacher answers">
+  <h2>We graded 1,200 teacher answers before training on any of them</h2>
+  <div class="grow row" style="align-items:center;gap:64px">
+    <div class="stat"><span class="n">1,200</span><span class="l">ToolACE training prompts answered by Qwen3-235B</span></div>
+    <div class="stat"><span class="n ok">909</span><span class="l">graded correct and kept</span></div>
+    <div class="stat"><span class="n bad">261</span><span class="l">graded wrong and excluded</span></div>
+    <div class="stat"><span class="n" style="color:#7A5B00">30</span><span class="l">set aside because the answer key itself was malformed</span></div>
+  </div>
+  <p>About 1 in 4.5 teacher answers was wrong (22.3%). Without the verdict, all of them would have been training data. The verified set, <code>toolace-verified-v2</code>, has 818 training and 91 validation rows; the longest is 1,792 tokens against a 7,500 cap.</p>
+  <div class="foot"><span>Curating with verdicts</span><span>5 / 12</span></div>
+</section>
+
+<!-- 6 -->
+<section class="slide" aria-label="Grading without a judge">
+  <h2>Grading without a judge, checked both ways</h2>
+  <div class="grow row" style="gap:56px">
+    <div class="col" style="flex:1.1">
+      <ul>
+        <li>Reads native <code>tool_calls</code> and ToolACE's text format, <code>[Name(k=v), &#8230;]</code>, including names like <code>Open-High-Low-Close (OHLC) API</code> and keys like <code>from=</code> and <code>$select=</code>.</li>
+        <li>Matches several calls order-insensitively, one-to-one.</li>
+        <li>BFCL mode: each argument lists every acceptable value; invented parameters fail.</li>
+        <li>Network failures count as errors, never as wrong answers.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.9">
+      <table class="t">
+        <thead><tr><th>On the real answer keys</th><th class="n">correct passes</th><th class="n">wrong fails</th></tr></thead>
+        <tbody>
+          <tr><td>ToolACE held-out</td><td class="n">250 / 250</td><td class="n">238 / 238</td></tr>
+          <tr><td>BFCL v3</td><td class="n">160 / 160</td><td class="n">160 / 160</td></tr>
+        </tbody>
+      </table>
+      <p class="small">A grader that only says &#8220;correct&#8221; would pass half of these checks. 84 automated tests in the repo.</p>
+    </div>
+  </div>
+  <div class="foot"><span>The grader</span><span>6 / 12</span></div>
+</section>
+
+<!-- 7 -->
+<section class="slide" aria-label="Accuracy results">
+  <h2>The 30B student is statistically indistinguishable from the 235B teacher</h2>
+  <div class="grow" style="display:flex;align-items:center">
+    <div class="bars" role="img" aria-label="ToolACE: student 74.0%, teacher 77.6%. BFCL: both 91.5%.">
+      <div class="bgroup">
+        <h3>ToolACE held-out, 250 items, the training distribution</h3>
+        <div class="brow"><span class="student">Qwen3-30B-A3B</span><div class="track"><div class="bar s" style="width:74.0%"></div></div><span class="bval">74.0%</span></div>
+        <div class="brow"><span class="teacher">Qwen3-235B</span><div class="track"><div class="bar t" style="width:77.6%"></div></div><span class="bval">77.6%</span></div>
+      </div>
+      <div class="bgroup">
+        <h3>BFCL v3, 200 items, a public benchmark it never trains on</h3>
+        <div class="brow"><span class="student">Qwen3-30B-A3B</span><div class="track"><div class="bar s" style="width:91.5%"></div></div><span class="bval">91.5%</span></div>
+        <div class="brow"><span class="teacher">Qwen3-235B</span><div class="track"><div class="bar t" style="width:91.5%"></div></div><span class="bval">91.5%</span></div>
+      </div>
+      <div class="axis"><span></span><div><span>0</span><span>25</span><span>50</span><span>75</span><span>100%</span></div><span></span></div>
+    </div>
+  </div>
+  <p class="small">Paired McNemar test on identical items. ToolACE: teacher +3.6 points, 95% CI [0.0, +7.6], p = 0.093. BFCL: 183/200 each, 4 items go each way, p = 1.</p>
+  <div class="foot"><span>Accuracy</span><span>7 / 12</span></div>
+</section>
+
+<!-- 8 -->
+<section class="slide" aria-label="Latency">
+  <h2>At about a tenth of the latency</h2>
+  <div class="grow row" style="align-items:center;gap:90px">
+    <div class="col"><span class="big student">553 ms</span><p>student median, ToolACE</p><span class="big teacher" style="margin-top:22px">10.4 s</span><p>teacher median, ToolACE</p></div>
+    <div class="col"><span class="big student">428 ms</span><p>student median, BFCL</p><span class="big teacher" style="margin-top:22px">3.8 s</span><p>teacher median, BFCL</p></div>
+  </div>
+  <p class="small">Each from one run at 16&#8211;24 concurrent requests on serverless inference. The ratio was 18.7&#215; and 8.8&#215;, so we claim an order of magnitude, not a multiple.</p>
+  <div class="foot"><span>Latency</span><span>8 / 12</span></div>
+</section>
+
+<!-- 9 -->
+<section class="slide" aria-label="Where they fail">
+  <h2>Both models struggle in the same places</h2>
+  <div class="grow row" style="gap:64px">
+    <div class="col">
+      <table class="t">
+        <thead><tr><th>BFCL category</th><th class="n student">30B</th><th class="n teacher">235B</th></tr></thead>
+        <tbody>
+          <tr><td>simple</td><td class="n">92.5%</td><td class="n">97.5%</td></tr>
+          <tr><td>multiple</td><td class="n">97.5%</td><td class="n">95.0%</td></tr>
+          <tr><td>parallel</td><td class="n">95.0%</td><td class="n">95.0%</td></tr>
+          <tr class="hot"><td>parallel_multiple</td><td class="n">80.0%</td><td class="n">82.5%</td></tr>
+          <tr><td>irrelevance</td><td class="n">92.5%</td><td class="n">87.5%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <table class="t">
+        <thead><tr><th>ToolACE failures</th><th class="n student">30B</th><th class="n teacher">235B</th></tr></thead>
+        <tbody>
+          <tr class="hot"><td>wrong argument value</td><td class="n">40</td><td class="n">32</td></tr>
+          <tr><td>wrong number of calls</td><td class="n">11</td><td class="n">13</td></tr>
+          <tr><td>no call when one was needed</td><td class="n">7</td><td class="n">2</td></tr>
+          <tr><td>wrong function</td><td class="n">4</td><td class="n">4</td></tr>
+          <tr><td>argument missing</td><td class="n">2</td><td class="n">5</td></tr>
+          <tr><td>malformed call</td><td class="n">1</td><td class="n">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p class="small">Several functions in one answer is the hardest case for both. 49 ToolACE items defeat both models, several because the answer key uses its own convention.</p>
+  <div class="foot"><span>Failure analysis</span><span>9 / 12</span></div>
+</section>
+
+<!-- 10 -->
+<section class="slide" aria-label="Replay">
+  <h2>When the student loses, it's usually a convention</h2>
+  <div class="grow" style="display:flex;flex-direction:column;justify-content:center">
+    <div class="case"><span>Key</span><div>[check_webpage_status(url="www.myonlinebookstore.com")]</div>
+      <span class="student">30B</span><div>[check_webpage_status(url="<mark>http://</mark>www.myonlinebookstore.com")]</div></div>
+    <div class="case"><span>Key</span><div>time_range={"start_time": "2025-09-12 00:00:00", &#8230;}</div>
+      <span class="student">30B</span><div>time_range={"start_time": "2025-09-12<mark>T</mark>00:00:00", &#8230;}</div></div>
+    <div class="case"><span>Key</span><div>[List of Countries by Income Level<mark>()</mark>]</div>
+      <span class="student">30B</span><div>[List of Countries by Income Level]</div></div>
+  </div>
+  <p class="small">The teacher got all three right. Of 250 items, 16 go to the teacher and 7 to the student. Conventions like these are what fine-tuning on verified answers teaches.</p>
+  <div class="foot"><span>Replay</span><span>10 / 12</span></div>
+</section>
+
+<!-- 11 -->
+<section class="slide" aria-label="Platform findings">
+  <h2>What we learned about the platform today</h2>
+  <div class="grow">
+    <table class="t findings" style="width:100%">
+      <thead><tr><th>Measured</th><th>What it meant</th><th>What we did</th></tr></thead>
+      <tbody>
+        <tr><td>HTTP 410</td><td>LoRA adapters can no longer be deployed serverlessly</td><td>Serving a pupil needs a dedicated endpoint</td></tr>
+        <tr><td>404 / 403</td><td>None of the five Llama models we tried is callable on our key, so an untrained Llama can't be scored</td><td>Student moved to Qwen3-30B-A3B, which is trainable and callable</td></tr>
+        <tr><td>model_not_found</td><td>DeepSeek-V3-0324 is gone</td><td>Teacher is Qwen3-235B-A22B, same family as the student</td></tr>
+        <tr><td>0 tokens trained</td><td>Both fine-tune jobs, submitted 14:34 and 14:45, were still at 0 tokens trained at 16:09, after 95 and 83 minutes</td><td>Built the eval so the result stands without a pupil</td></tr>
+        <tr><td>503 bursts</td><td>Serverless inference was intermittently unavailable</td><td>Retry, back-off and a per-item cache; outages are errors, never wrong answers</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="foot"><span>Platform findings</span><span>11 / 12</span></div>
+</section>
+
+<!-- 12 -->
+<section class="slide" aria-label="The ask">
+  <h2>One field closes the loop</h2>
+  <div class="grow" style="display:flex;flex-direction:column;justify-content:center;gap:34px">
+    <div class="ask"><p>Add a verdict field to Inference Logs, and let Data Lab filter on it. Then every team can train on the answers that were actually right.</p></div>
+    <ul style="max-width:60ch">
+      <li>Ready now: <code>toolace-verified-v2</code>, 818 verified rows, waiting to be submitted.</li>
+      <li>Next: serve the fine-tuned student and add it as the third bar on both benchmarks with one command.</li>
+      <li>Code: <code>prkshverma09/NebiusHack</code>, 84 passing tests, every number reproducible from cached runs.</li>
+    </ul>
+  </div>
+  <div class="foot"><span>The ask</span><span>12 / 12</span></div>
+</section>
+
+</div></div>
+
+<nav class="nav" aria-label="Slide navigation">
+  <button id="prev" type="button" aria-label="Previous slide">Previous</button>
+  <button id="next" type="button" aria-label="Next slide">Next</button>
+</nav>
+
+<script>
+(function () {
+  var deck = document.getElementById('deck');
+  var slides = Array.prototype.slice.call(deck.querySelectorAll('.slide'));
+  var i = 0;
+  function fit() {
+    var w = window.innerWidth - 32, h = window.innerHeight - 120;   // room for the nav buttons below the slide
+    var s = Math.min(w / 1280, h / 720);
+    deck.style.transform = 'scale(' + Math.max(s, 0.1) + ')';
+  }
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function (el, k) { el.classList.toggle('on', k === i); });
+    try { history.replaceState(null, '', '#s' + (i + 1)); } catch (e) {}
+  }
+  document.getElementById('prev').addEventListener('click', function () { show(i - 1); });
+  document.getElementById('next').addEventListener('click', function () { show(i + 1); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); show(i + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); show(i - 1); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+  });
+  deck.addEventListener('click', function (e) {
+    var r = deck.getBoundingClientRect();
+    show(e.clientX - r.left > r.width / 2 ? i + 1 : i - 1);
+  });
+  // Fetch every face the deck uses up front, so no slide swaps fonts mid-talk.
+  if (document.fonts && document.fonts.load) {
+    ['400 23px "Bricolage Grotesque"', '500 23px "Bricolage Grotesque"', '700 50px "Bricolage Grotesque"',
+     '800 92px "Bricolage Grotesque"', '400 15px "IBM Plex Mono"', '500 15px "IBM Plex Mono"']
+      .forEach(function (f) { document.fonts.load(f, 'TraceForge 0123456789 [](){}=') .catch(function () {}); });
+  }
+  var m = /^#s(\d+)$/.exec(location.hash || '');
+  window.addEventListener('resize', fit);
+  fit();
+  show(m ? parseInt(m[1], 10) - 1 : 0);
+})();
+</script>
