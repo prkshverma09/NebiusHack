@@ -18,7 +18,8 @@ from traceforge.config import REPO_ROOT, Settings, load_settings
 from traceforge.costs import PriceTable
 from traceforge.db import DB
 from traceforge.gateway import Gateway, GoldIndex
-from traceforge.router import GateError, demote, promote
+from traceforge.orchestrator import Orchestrator, OrchestratorError
+from traceforge.router import GateError, demote, promote, to_shadow
 
 DASHBOARD = REPO_ROOT / "dashboard" / "index.html"
 EVALS_DIR = REPO_ROOT / "data" / "evals"
@@ -30,6 +31,7 @@ class Services:
     settings: Settings
     db: DB
     gateway: Gateway
+    orchestrator: Orchestrator
 
     @classmethod
     def build(cls) -> "Services":
@@ -41,7 +43,7 @@ class Services:
         gw = Gateway(db=db, prices=prices, upstream_base_url=s.upstream_base_url,
                      api_key=s.nebius_api_key, gold=GoldIndex.from_holdouts(HOLDOUTS),
                      grader_for=get_grader)
-        return cls(settings=s, db=db, gateway=gw)
+        return cls(settings=s, db=db, gateway=gw, orchestrator=Orchestrator(s))
 
 
 def _eval_runs() -> list[dict]:
@@ -135,10 +137,66 @@ def create_app(services: Services | None = None) -> FastAPI:
             out.append(row)
         return {"jobs": out}
 
+    @app.post("/models/{model_id}/shadow")
+    def shadow_model_ep(model_id: str):
+        try:
+            to_shadow(svc.db, model_id)
+        except GateError as e:
+            raise HTTPException(404, str(e)) from e
+        return {"ok": True}
+
+    @app.post("/replay")
+    async def replay(request: Request):
+        body = await request.json()
+        try:
+            return await svc.gateway.replay(body["trace_id"], body["model"])
+        except KeyError as e:
+            raise HTTPException(404, f"no trace {e}") from e
+
     @app.post("/datasets")
+    async def datasets(request: Request):
+        """B's verdict-filtered builder over the model's *correct* traces."""
+        body = await request.json()
+        from traceforge.datasets import DatasetError, build   # B-owned
+        try:
+            m = build(model=body.get("model", svc.settings.teacher_model), name=body["name"],
+                      holdout=HOLDOUTS["toolace"], db_path=svc.settings.db_path,
+                      task_id=body.get("task_id"), source=body.get("source"))
+        except DatasetError as e:
+            raise HTTPException(422, str(e)) from e
+        return {"dataset_id": body["name"], **m}
+
     @app.post("/distill")
-    def not_yet():
-        raise HTTPException(501, "use scripts/build_xlam_dataset.py and scripts/submit_job.py")
+    async def distill(request: Request):
+        body = await request.json()
+        rows = [d for d in svc.db._q("SELECT * FROM datasets WHERE id=? OR name=?",
+                                     (body["dataset_id"], body["dataset_id"]))]
+        if not rows:
+            raise HTTPException(404, f"no dataset {body['dataset_id']}")
+        d = rows[0]
+        model = body.get("model", svc.settings.student_base)
+        try:
+            out = svc.orchestrator.submit(
+                train=Path(d["train_path"]), val=Path(d["val_path"]) if d["val_path"] else None,
+                model=model, suffix=body.get("suffix", "pupil-fc"), overrides=body.get("hp"))
+        except OrchestratorError as e:
+            raise HTTPException(502, str(e)) from e
+        job = out["job"]
+        svc.db.upsert_job(nebius_job_id=job["id"], base_model=model, status=job.get("status"),
+                          hyperparams=out["request"]["hyperparameters"], dataset_id=d["id"])
+        return {"job_id": job["id"], "status": job.get("status")}
+
+    @app.get("/jobs/{job_id}")
+    def job(job_id: str):
+        try:
+            st = svc.orchestrator.status(job_id)
+        except OrchestratorError as e:
+            raise HTTPException(502, str(e)) from e
+        svc.db.upsert_job(nebius_job_id=job_id, base_model=st["model"], status=st["status"],
+                          trained_tokens=st["trained_tokens"],
+                          error=json.dumps(st["error"]) if st["error"] else None)
+        ck = st["checkpoints"]
+        return {**st, "checkpoint_id": ck[-1]["id"] if ck else None}
 
     @app.get("/")
     def dashboard():

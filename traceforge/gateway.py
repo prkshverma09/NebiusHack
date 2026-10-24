@@ -24,7 +24,7 @@ import httpx
 from traceforge.costs import PriceTable
 from traceforge.db import DB
 from traceforge.fingerprint import fingerprint
-from traceforge.router import pick_upstream
+from traceforge.router import pick_upstream, shadow_model
 
 log = logging.getLogger("traceforge.gateway")
 
@@ -64,6 +64,7 @@ class Gateway:
     gold: GoldIndex
     grader_for: callable           # task name -> Grader (B's registry); raises if unknown
     client: httpx.AsyncClient | None = None
+    _pending: set = field(default_factory=set)   # keeps shadow tasks alive until done
 
     def _client(self) -> httpx.AsyncClient:
         if self.client is None:
@@ -102,10 +103,62 @@ class Gateway:
 
         # Off the request path: a locked db (B's writer shares the file) must not
         # stall the caller, and the write retries instead of being dropped.
-        asyncio.get_running_loop().run_in_executor(
-            None, self._record_safely, payload, routed, task_id, task_header,
-            session_id, status, raw, latency_ms)
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, self._record_safely, payload, routed, task_id, task_header,
+                             session_id, status, raw, latency_ms, "proxy")
+        # Shadow mode: a candidate answers the same prompt; the caller never sees it.
+        shadow = shadow_model(self.db, task_id)
+        if shadow and status == 200 and shadow != routed:
+            self._pending.add(t := asyncio.ensure_future(
+                self._shadow_call(payload, shadow, task_id, task_header, session_id)))
+            t.add_done_callback(self._pending.discard)
         return status, raw, ctype
+
+    async def _upstream(self, payload: dict) -> tuple[int, bytes, int]:
+        t0 = time.time()
+        try:
+            r = await self._client().post(
+                f"{self.upstream_base_url.rstrip('/')}/chat/completions", json=payload,
+                headers={"Authorization": f"Bearer {self.api_key}"})
+            status, raw = r.status_code, r.content
+        except httpx.HTTPError as e:
+            status = 502
+            raw = json.dumps({"error": {"type": "upstream_unreachable",
+                                        "message": f"{type(e).__name__}: {e}"}}).encode()
+        return status, raw, int((time.time() - t0) * 1000)
+
+    async def _shadow_call(self, payload, model, task_id, task_header, session_id) -> None:
+        status, raw, ms = await self._upstream({**payload, "model": model})
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._record_safely, {**payload, "model": model}, model, task_id,
+            task_header, session_id, status, raw, ms, "shadow")
+
+    async def replay(self, trace_id: str, model: str) -> dict:
+        """POST /replay: re-ask a recorded prompt to `model` and grade the new answer."""
+        t = self.db.trace(trace_id)
+        if t is None:
+            raise KeyError(trace_id)
+        req = json.loads(t["request_json"])
+        status, raw, ms = await self._upstream({**req, "model": model})
+        try:
+            response = json.loads(raw)
+        except ValueError:
+            response = None
+        verdict, detail = None, f"upstream_http_{status}"
+        hit = self.gold.lookup(req.get("messages", []))
+        if status == 200 and hit:
+            try:
+                v = self.grader_for(hit[0]).grade(prompt_messages=req["messages"],
+                                                  response=response, ground_truth=hit[1])
+                verdict, detail = ("correct" if v.correct else "incorrect"), v.detail
+            except Exception as e:  # noqa: BLE001 - a grader crash is reported, not hidden
+                verdict, detail = "error", f"grader_error:{type(e).__name__}"
+        elif status == 200:
+            detail = "no_ground_truth"
+        return {"trace_id": trace_id, "model": model, "status": status, "latency_ms": ms,
+                "response": response, "verdict": verdict, "detail": detail,
+                "original": {"model": t["model"], "verdict": t["grade"],
+                             "detail": t["grade_detail"]}}
 
     def _record_safely(self, *args) -> None:
         for attempt in range(6):
@@ -122,7 +175,7 @@ class Gateway:
                 return
 
     def _record(self, payload, model, task_id, task_header, session_id,
-                status, raw, latency_ms) -> None:
+                status, raw, latency_ms, source="proxy") -> None:
         response = None
         try:
             response = json.loads(raw)
@@ -134,7 +187,7 @@ class Gateway:
             prompt_tokens=(usage or {}).get("prompt_tokens"),
             completion_tokens=(usage or {}).get("completion_tokens"),
             latency_ms=latency_ms, cost_usd=self.prices.cost_usd(model, usage),
-            session_id=session_id, source="proxy", task_name=task_header)
+            session_id=session_id, source=source, task_name=task_header)
         if status != 200:
             kind = (response or {}).get("error", {}).get("type") if isinstance(response, dict) else None
             self.db.update_grade(trace_id, grader="transport", correct=None,
