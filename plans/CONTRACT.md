@@ -151,15 +151,60 @@ Every builder run prints: row count, token-length histogram, max row tokens. **H
 
 `promote` allowed only if BOTH: (a) held-out eval exists for the candidate with `acc(candidate) ≥ acc(teacher) − 0.05` on its task; (b) shadow win-rate over ≥50 calls ≥ teacher − margin. Otherwise 409 with reason. `demote` is unconditional (rollback).
 
-## 9. Hard gates (from TF-02 — clock, not estimates)
+## 9. Hard gates — ANCHORED TO WALL-CLOCK (TF-02, v2)
 
-| By | Must be true |
+> ⚠️ **The previous version of this table was relative (`T+0:15` … `T+3:45`) with `T` never anchored.
+> Read against the real clock it reproduced TF-02, the exact finding it was written to fix:**
+> at T = 14:09 it put deployment at **16:54** and the score table at **17:24**, against judging at
+> **16:30** — an 84-minute overrun. Relative gates are estimates wearing a deadline's clothes.
+> **These times are absolute. Read the clock; do not re-derive them.**
+
+Back-planned from judging at 16:30 (judges walk the room; be demo-ready, not mid-run):
+
+| By (wall clock) | Must be true |
 |---|---|
-| T+0:15 | `NEBIUS_API_KEY` set; `smoke_nebius.py` green incl. deploy-API probe |
-| T+1:00 | graders grade real items; xlam floor downloaded; first JSONL emitted (even if xlam-only) |
-| **T+1:45** | **LoRA job submitted on 8B. Hard deadline.** |
-| T+2:45 | checkpoint deployed; smoke call answers |
-| T+3:15 | 3-model eval done; score table rendered |
-| T+3:45 | demo rehearsed once end-to-end |
+| **14:25** | `NEBIUS_API_KEY` works; `smoke_nebius.py` green **incl. the `POST /v0/models` deploy probe** (TF-07) |
+| **14:40** | xlam licence accepted (`gated: auto` — instant), rows downloaded, `{train,val}.jsonl` written, token audit passed (TF-03) |
+| **14:50** | **LoRA job SUBMITTED on `Llama-3.1-8B-Instruct`. HARD DEADLINE — the single irrecoverable gate.** |
+| 15:45 | job `succeeded`; checkpoint deployed; `pupil-*` answers one real call |
+| 16:05 | 3-model eval complete over held-out items; McNemar + CI computed |
+| 16:15 | score table + cost ratio rendered in the dashboard |
+| 16:25 | demo rehearsed once, end to end |
+
+**Why 14:50 and not later.** Job wall-clock including queue is unmeasured (TF-11 Q2 — still
+unanswered). Deployment must be done by 15:45, so a 55-minute job needs submission by 14:50. If a
+mentor gives you the real figure, re-derive this one number and nothing else.
+
+**Everything else is built while the job trains.** The server, router, dashboard, eval harness, BFCL
+grader and shadow mode all have ~55 minutes of free wall-clock after submission. Nothing that can be
+built during training belongs before the gate.
 
 Order of truth if anything slips: **job submitted > eval numbers > dashboard > second task > shadow mode**.
+
+### 9a. Critical-path change: xlam is the trace source, not the fallback
+
+Verified: each `Salesforce/xlam-function-calling-60k` row carries **`query` + `tools` + `answers`**,
+where `answers` holds the ground-truth call(s) as `{name, arguments}`. **The dataset supplies the prompt
+AND the ground truth.** Consequences:
+
+1. **Generate teacher traces over xlam prompts and grade against xlam's own `answers`.** The thesis —
+   distillation from *verified teacher traces* — is fully preserved. A job trained on raw xlam rows is
+   fine-tuning on a public dataset and is a visibly weaker story; do not settle for it unless the clock
+   forces it.
+2. **The grader for the critical path is a dict comparison**, not a BFCL AST matcher: compare `name`,
+   then `arguments` key-by-key, order-insensitive. ~25 lines. B1's full AST matcher is no longer a
+   blocker — it moves to the eval path, where it has until 16:05.
+3. **BFCL becomes the held-out eval set.** This is *better* than the original plan: train on xlam,
+   evaluate on BFCL, and the score table demonstrates **generalisation across distributions** rather
+   than memorisation of one. Say that on stage — it pre-empts the obvious judge question.
+
+Revised pre-gate ordering — only these three things exist before 14:50:
+
+```
+A0.2 smoke_nebius.py   (deploy probe decides serverless vs dedicated NOW)
+B0   xlam -> teacher traces -> graded -> JSONL + token audit
+A4   orchestrator / submit_job.py   (the emergency CLI path, no server needed)
+```
+
+If traces are not graded by 14:45, submit on raw xlam rows and regenerate v2 during training. **A
+submitted job beats a better dataset.**
